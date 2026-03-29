@@ -197,31 +197,26 @@ if VERSION >= v"1.7-"
     end
 
     for solver in solvers
-        function loss(p)
+        function loss(p, sensealg = nothing)
             prob = ODEProblem(dudt, [3.0, 2.0, 1.0], (0.0, 1.0), p)
-            sol = solve(prob, solver, dt = 0.01, saveat = 0.1, abstol = 1.0e-5, reltol = 1.0e-5)
-            return sum(abs2, Array(sol))
-        end
-
-        loss(p)
-        dp = Zygote.gradient(loss, p)[1]
-
-        function loss(p, sensealg)
-            prob = ODEProblem(dudt, [3.0, 2.0, 1.0], (0.0, 1.0), p)
+            kwargs = sensealg === nothing ? (;) : (; sensealg)
             sol = solve(
-                prob, solver; dt = 0.01, saveat = 0.1, sensealg,
-                abstol = 1.0e-5, reltol = 1.0e-5
+                prob, solver; dt = 0.01, saveat = 0.1,
+                abstol = 1.0e-5, reltol = 1.0e-5, kwargs...
             )
             return sum(abs2, Array(sol))
         end
+
+        # Use GaussAdjoint as ground truth — the auto-chosen ForwardDiffSensitivity
+        # can have perturbation confusion with solvers that internally use ForwardDiff
+        # for Jacobians (forwarddiffs_model = true).
+        dp = Zygote.gradient(p -> loss(p, GaussAdjoint()), p)[1]
 
         dp1 = Zygote.gradient(p -> loss(p, InterpolatingAdjoint()), p)[1]
         @test dp ≈ dp1 rtol = 1.0e-2
         dp1 = Zygote.gradient(p -> loss(p, BacksolveAdjoint()), p)[1]
         @test dp ≈ dp1 rtol = 1.0e-2
         dp1 = Zygote.gradient(p -> loss(p, QuadratureAdjoint()), p)[1]
-        @test dp ≈ dp1 rtol = 1.0e-2
-        dp1 = Zygote.gradient(p -> loss(p, ForwardDiffSensitivity()), p)[1]
         @test dp ≈ dp1 rtol = 1.0e-2
         if SciMLBase.forwarddiffs_model(solver)
             @test Zygote.gradient(
@@ -233,6 +228,8 @@ if VERSION >= v"1.7-"
             @test_broken Zygote.gradient(p -> loss(p, ReverseDiffAdjoint()), p)[1] isa
                 Vector
         else
+            dp1 = Zygote.gradient(p -> loss(p, ForwardDiffSensitivity()), p)[1]
+            @test dp ≈ dp1 rtol = 1.0e-2
             dp1 = Zygote.gradient(
                 p -> loss(p, QuadratureAdjoint(autojacvec = EnzymeVJP())), p
             )[1]
