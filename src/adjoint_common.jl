@@ -784,7 +784,7 @@ function (f::ReverseLossCallback)(integrator)
         @assert sensealg isa QuadratureAdjoint
         integrator.u += Δλd
     end
-    derivative_discontinuity!(integrator, true)
+    u_modified!(integrator, true)
     cur_time[] -= 1
     return nothing
 end
