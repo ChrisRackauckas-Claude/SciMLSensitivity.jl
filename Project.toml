@@ -85,7 +85,6 @@ LinearSolve = "2, 3"
 Lux = "1"
 Markdown = "1.10"
 ModelingToolkit = "10, 11"
-ModelingToolkitStandardLibrary = "2"
 Mooncake = "0.5.24"
 Reactant = "0.2.22"
 NLsolve = "4.5.1"
@@ -132,7 +131,6 @@ Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 ExplicitImports = "7d51a73a-1435-4ff3-83d9-f097790105c7"
 Lux = "b2108857-7c20-44ae-9111-449ecde12c47"
 ModelingToolkit = "961ee093-0014-501f-94e3-6117800e7a78"
-ModelingToolkitStandardLibrary = "16a59e39-deab-5bd0-87e4-056b12336739"
 Mooncake = "da2b9cff-9c12-43a0-ae48-6db2b0edb7d6"
 NLsolve = "2774e3e8-f4cf-5e23-947b-6d7e65073b56"
 Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
@@ -150,4 +148,4 @@ StochasticDiffEq = "789caeaf-c7a9-5a7d-9973-96adeb23e2a0"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["AlgebraicMultigrid", "Aqua", "Calculus", "ComponentArrays", "DelayDiffEq", "DifferentiationInterface", "Distributed", "ExplicitImports", "Lux", "ModelingToolkit", "ModelingToolkitStandardLibrary", "Mooncake", "NLsolve", "NonlinearSolve", "Optimization", "OptimizationOptimisers", "OrdinaryDiffEq", "Pkg", "Reactant", "SCCNonlinearSolve", "SafeTestsets", "SparseArrays", "StableRNGs", "SteadyStateDiffEq", "StochasticDiffEq", "Test"]
+test = ["AlgebraicMultigrid", "Aqua", "Calculus", "ComponentArrays", "DelayDiffEq", "DifferentiationInterface", "Distributed", "ExplicitImports", "Lux", "ModelingToolkit", "Mooncake", "NLsolve", "NonlinearSolve", "Optimization", "OptimizationOptimisers", "OrdinaryDiffEq", "Pkg", "Reactant", "SCCNonlinearSolve", "SafeTestsets", "SparseArrays", "StableRNGs", "SteadyStateDiffEq", "StochasticDiffEq", "Test"]
