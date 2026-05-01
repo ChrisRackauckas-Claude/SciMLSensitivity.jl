@@ -1346,6 +1346,13 @@ function _jacNoise!(
     return
 end
 
+function _jacNoise!(
+        λ, y, p, t, S::TS, isnoise::EnzymeVJP, dgrad, dλ,
+        dy
+    ) where {TS <: SensitivityFunction}
+    _jacNoise!(λ, y, p, t, S, false, dgrad, dλ, dy)
+end
+
 function accumulate_cost!(
         dλ, y, p, t, S::TS,
         dgrad = nothing

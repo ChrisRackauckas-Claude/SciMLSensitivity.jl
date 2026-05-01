@@ -60,13 +60,17 @@ g4 = Zygote.gradient(
     θ -> test_f2(θ, ReverseDiffAdjoint(), PIController(7 // 50, 2 // 25)),
     p
 )
-@test_broken g5 = Zygote.gradient(
-    θ -> test_f2(
-        θ, ReverseDiffAdjoint(),
-        PIDController(1 / 18.0, 1 / 9.0, 1 / 18.0)
-    ),
-    p
-)
+g5 = try
+    Zygote.gradient(
+        θ -> test_f2(
+            θ, ReverseDiffAdjoint(),
+            PIDController(1 / 18.0, 1 / 9.0, 1 / 18.0)
+        ),
+        p
+    )
+catch
+    nothing
+end
 g6 = Zygote.gradient(
     θ -> test_f2(
         θ, ForwardDiffSensitivity(),
@@ -74,19 +78,23 @@ g6 = Zygote.gradient(
     ),
     p
 )
-@test_broken g7 = Zygote.gradient(
-    θ -> test_f2(
-        θ, ReverseDiffAdjoint(),
-        OrdinaryDiffEqCore.PredictiveController(),
-        TRBDF2()
-    ),
-    p
-)
+g7 = try
+    Zygote.gradient(
+        θ -> test_f2(
+            θ, ReverseDiffAdjoint(),
+            OrdinaryDiffEqCore.PredictiveController(),
+            TRBDF2()
+        ),
+        p
+    )
+catch
+    nothing
+end
 
 @test g1[1] ≈ findiff[2, 1:2]
 @test g2[1] ≈ findiff[2, 1:2]
 @test g3[1] ≈ findiff[2, 1:2]
 @test g4[1] ≈ findiff[2, 1:2]
-@test_broken g5[1] ≈ findiff[2, 1:2]
+@test_broken g5 !== nothing && g5[1] ≈ findiff[2, 1:2]
 @test g6[1] ≈ findiff[2, 1:2]
-@test_broken g7[1] ≈ findiff[2, 1:2]
+@test_broken g7 !== nothing && g7[1] ≈ findiff[2, 1:2]
