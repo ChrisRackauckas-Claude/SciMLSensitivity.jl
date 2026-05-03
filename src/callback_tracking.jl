@@ -112,7 +112,7 @@ function (f::TrackedAffect)(integrator, event_idx = nothing)
     else
         f.affect!(integrator, event_idx)
     end
-    return if integrator.u_modified
+    return if integrator.derivative_discontinuity
         if isempty(f.event_times)
             push!(f.event_times, integrator.t)
             push!(f.tprev, integrator.tprev)

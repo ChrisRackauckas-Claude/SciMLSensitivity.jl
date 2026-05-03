@@ -1,5 +1,6 @@
 using SciMLSensitivity, OrdinaryDiffEq, RecursiveArrayTools, DiffEqBase,
     ForwardDiff, Calculus, QuadGK, LinearAlgebra, Zygote, Mooncake, ADTypes, Reactant
+using OrdinaryDiffEqNonlinearSolve: NLAnderson
 using Test
 
 function fb(du, u, p, t)
