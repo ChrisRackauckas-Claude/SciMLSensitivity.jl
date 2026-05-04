@@ -112,11 +112,18 @@ function (f::TrackedAffect)(integrator, event_idx = nothing)
     else
         f.affect!(integrator, event_idx)
     end
-    # VectorContinuousCallback now passes a `Vector{Int}` of fired event
-    # indices instead of a single `Int`; flatten with `append!` so the
-    # event_idx Vector{Int} stays homogeneous in both code paths.
-    record_event_idx!(events, idx) =
-        idx isa AbstractVector ? append!(events, idx) : push!(events, idx)
+    # VectorContinuousCallback now passes a `Vector{Int8}` of crossing
+    # directions per event component (0 = didn't fire, ±1 = fired with
+    # crossing direction). Translate to the single fired component index
+    # we previously stored. Multiple simultaneous events keep just the
+    # first fired index; this matches what the legacy single-Int dispatch
+    # would have recorded.
+    record_event_idx!(events, idx) = if idx isa AbstractVector
+        i = findfirst(!iszero, idx)
+        i === nothing || push!(events, Int(i))
+    else
+        push!(events, idx)
+    end
     return if integrator.derivative_discontinuity
         if isempty(f.event_times)
             push!(f.event_times, integrator.t)

@@ -1,6 +1,6 @@
 using SciMLSensitivity, OrdinaryDiffEq, RecursiveArrayTools, DiffEqBase,
     ForwardDiff, Calculus, QuadGK, LinearAlgebra, Zygote, Mooncake, ADTypes, Reactant
-using OrdinaryDiffEqNonlinearSolve: NLAnderson
+using OrdinaryDiffEqNonlinearSolve: NLAnderson, BrownFullBasicInit
 using OrdinaryDiffEqSDIRK: Kvaerno5
 using OrdinaryDiffEqRosenbrock: Rodas4
 using Test
@@ -1306,7 +1306,7 @@ function G(p, prob, ts, cost)
     tmp_prob_mm = remake(prob; u0 = convert.(eltype(p), prob.u0), p)
     sol = solve(
         tmp_prob_mm, Rodas4(autodiff = AutoFiniteDiff()), abstol = 1.0e-14, reltol = 1.0e-14,
-        saveat = ts
+        saveat = ts, initializealg = BrownFullBasicInit()
     )
     return cost(sol)
 end
