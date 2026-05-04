@@ -1,6 +1,7 @@
 using Zygote, SciMLSensitivity
 println("Starting tests")
 using OrdinaryDiffEq, ForwardDiff, Test, Reactant
+using OrdinaryDiffEqFIRK: RadauIIA5
 
 function lotka_volterra(u, p, t)
     x, y = u

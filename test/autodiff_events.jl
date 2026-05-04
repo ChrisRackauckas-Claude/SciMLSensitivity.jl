@@ -1,5 +1,6 @@
 using SciMLSensitivity
 using OrdinaryDiffEq, OrdinaryDiffEqCore, Calculus, Test
+using OrdinaryDiffEqCore: IController, PIController
 using Zygote
 
 function f(du, u, p, t)

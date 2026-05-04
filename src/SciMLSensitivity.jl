@@ -14,7 +14,7 @@ using Functors: Functors, fmap
 using FunctionProperties: hasbranching
 using FunctionWrappersWrappers: FunctionWrappersWrappers
 using GPUArraysCore: GPUArraysCore
-using IntervalSets
+using IntervalSets: IntervalSets, ..
 using LinearSolve: LinearSolve
 using PreallocationTools: PreallocationTools, get_tmp, DiffCache,
     LazyBufferCache
