@@ -2,7 +2,8 @@ using Zygote, SciMLSensitivity
 println("Starting tests")
 using OrdinaryDiffEq, ForwardDiff, Test, Reactant
 using OrdinaryDiffEqFIRK: RadauIIA5
-using OrdinaryDiffEqRosenbrock: Rodas4, Rodas5
+using OrdinaryDiffEqRosenbrock: Rodas3, Rodas4, Rodas5, Rosenbrock23, ROS34PW3
+using OrdinaryDiffEqStabilizedRK: ROCK2, ROCK4
 using OrdinaryDiffEqSDIRK: ImplicitEuler, KenCarp4, TRBDF2
 
 function lotka_volterra(u, p, t)
