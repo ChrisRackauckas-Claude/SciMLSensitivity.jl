@@ -1469,7 +1469,8 @@ for iip in [true, false]
         sol_singular_mm, alg, t = ts,
         dgdu_discrete = dg_singular, abstol = 1.0e-8,
         reltol = 1.0e-8, sensealg = QuadratureAdjoint(),
-        maxiters = Int(1.0e6)
+        maxiters = Int(1.0e6),
+        initializealg = BrownFullBasicInit()
     )
     reference_sol = ForwardDiff.gradient(
         p -> G(
@@ -1484,7 +1485,8 @@ for iip in [true, false]
         sol_singular_mm, alg, t = ts,
         dgdu_discrete = dg_singular, abstol = 1.0e-8,
         reltol = 1.0e-8, sensealg = GaussAdjoint(),
-        maxiters = Int(1.0e6)
+        maxiters = Int(1.0e6),
+        initializealg = BrownFullBasicInit()
     )
     @test res_gauss ≈ res rtol = 1.0e-5
 
@@ -1493,7 +1495,8 @@ for iip in [true, false]
         sol_singular_mm, alg, t = ts,
         dgdu_discrete = dg_singular, abstol = 1.0e-8,
         reltol = 1.0e-8, sensealg = GaussKronrodAdjoint(),
-        maxiters = Int(1.0e6)
+        maxiters = Int(1.0e6),
+        initializealg = BrownFullBasicInit()
     )
     @test res_gausskron ≈ res rtol = 1.0e-5
 
@@ -1504,7 +1507,8 @@ for iip in [true, false]
         abstol = 1.0e-8,
         reltol = 1.0e-8,
         sensealg = InterpolatingAdjoint(),
-        maxiters = Int(1.0e6)
+        maxiters = Int(1.0e6),
+        initializealg = BrownFullBasicInit()
     )
     @test res_interp ≈ res rtol = 1.0e-5
     _,
@@ -1514,7 +1518,8 @@ for iip in [true, false]
         abstol = 1.0e-8,
         reltol = 1.0e-8,
         sensealg = InterpolatingAdjoint(checkpointing = true),
-        checkpoints = sol_singular_mm.t[1:10:end]
+        checkpoints = sol_singular_mm.t[1:10:end],
+        initializealg = BrownFullBasicInit()
     )
     @test res_interp2 ≈ res rtol = 1.0e-5
 
@@ -1566,7 +1571,7 @@ prob_singular_mm = ODEProblem(
 )
 sol_singular_mm = solve(
     prob_singular_mm, Rodas4(autodiff = AutoFiniteDiff()),
-    reltol = 1.0e-14, abstol = 1.0e-14
+    reltol = 1.0e-14, abstol = 1.0e-14, initializealg = BrownFullBasicInit()
 )
 ts = [0.01, 0.25, 0.5, 1.0, 1.5]
 dg_singular(out, u, p, t, i) = fill!(out, 1)
@@ -1588,7 +1593,8 @@ for salg in [
         sol_singular_mm, alg, t = ts,
         dgdu_discrete = dg_singular, abstol = 1.0e-14,
         reltol = 1.0e-14, sensealg = salg,
-        maxiters = Int(1.0e6)
+        maxiters = Int(1.0e6),
+        initializealg = BrownFullBasicInit()
     )
     @test res' ≈ reference_sol rtol = 1.0e-5
 end
