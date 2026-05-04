@@ -112,6 +112,11 @@ function (f::TrackedAffect)(integrator, event_idx = nothing)
     else
         f.affect!(integrator, event_idx)
     end
+    # VectorContinuousCallback now passes a `Vector{Int}` of fired event
+    # indices instead of a single `Int`; flatten with `append!` so the
+    # event_idx Vector{Int} stays homogeneous in both code paths.
+    record_event_idx!(events, idx) =
+        idx isa AbstractVector ? append!(events, idx) : push!(events, idx)
     return if integrator.derivative_discontinuity
         if isempty(f.event_times)
             push!(f.event_times, integrator.t)
@@ -119,7 +124,7 @@ function (f::TrackedAffect)(integrator, event_idx = nothing)
             push!(f.uleft, uleft)
             push!(f.pleft, pleft)
             if event_idx !== nothing
-                push!(f.event_idx, event_idx)
+                record_event_idx!(f.event_idx, event_idx)
             end
         else
             if !maximum(.≈(integrator.t, f.event_times, rtol = 0.0, atol = 1.0e-14))
@@ -128,7 +133,7 @@ function (f::TrackedAffect)(integrator, event_idx = nothing)
                 push!(f.uleft, uleft)
                 push!(f.pleft, pleft)
                 if event_idx !== nothing
-                    push!(f.event_idx, event_idx)
+                    record_event_idx!(f.event_idx, event_idx)
                 end
             end
         end
