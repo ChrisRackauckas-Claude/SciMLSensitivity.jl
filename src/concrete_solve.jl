@@ -1117,6 +1117,7 @@ function SciMLBase._concrete_solve_adjoint(
     end
 
     function forward_sensitivity_backpass(Δ)
+        Δ = Δ isa AbstractThunk ? unthunk(Δ) : Δ
         adj = sum(eachindex(du)) do i
             J = du[i]
             if Δ isa AbstractVector
@@ -1308,6 +1309,7 @@ function SciMLBase._concrete_solve_adjoint(
     ts = current_time(sol)
 
     function forward_sensitivity_backpass(Δ)
+        Δ = Δ isa AbstractThunk ? unthunk(Δ) : Δ
         if !(p === nothing || p === SciMLBase.NullParameters())
             dp = @thunk begin
                 chunk_size = if CS === 0 && length(tunables) < 12
