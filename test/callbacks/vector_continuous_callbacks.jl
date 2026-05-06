@@ -77,11 +77,21 @@ end
             out[2] = (u[3] - 10.0)u[3]
         end
         @testset "callback with linear affect" begin
-            function affect!(integrator, idx)
-                if idx == 1
-                    integrator.u[2] = -integrator.p[2] * integrator.u[2]
-                elseif idx == 2
-                    integrator.u[4] = -integrator.p[2] * integrator.u[4]
+            # Affect supports both DiffEqBase v7's
+            # `(integrator, simultaneous_events::Vector{Int8})` direct
+            # dispatch (used by the forward solve / ForwardDiff path)
+            # and SciMLSensitivity's per-fire `(integrator, idx::Int)`
+            # translation (used by the adjoint replay through
+            # `TrackedAffect`).
+            function affect!(integrator, ev)
+                indices = ev isa AbstractVector ?
+                    (i for i in eachindex(ev) if !iszero(ev[i])) : (ev,)
+                for idx in indices
+                    if idx == 1
+                        integrator.u[2] = -integrator.p[2] * integrator.u[2]
+                    elseif idx == 2
+                        integrator.u[4] = -integrator.p[2] * integrator.u[4]
+                    end
                 end
             end
             cb = VectorContinuousCallback(condition, affect!, 2)
@@ -95,8 +105,11 @@ end
             out[2] = cos(t)
         end
 
-        function affect!(integrator, idx)
-            println("$(idx) triggered!")
+        function affect!(integrator, ev)
+            indices = ev isa AbstractVector ?
+                collect(i for i in eachindex(ev) if !iszero(ev[i])) : (ev,)
+            isempty(indices) && return
+            println("$(indices) triggered!")
             u_new = [0.5, 1.0, 0.0, 0.0]
             integrator.u .= u_new
         end
