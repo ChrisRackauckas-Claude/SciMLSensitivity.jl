@@ -45,8 +45,8 @@ using OrdinaryDiffEqCore: OrdinaryDiffEqCore, BrownFullBasicInit, DefaultInit,
     default_nlsolve, has_autodiff
 
 # AD Backends
-using ChainRulesCore: unthunk, @thunk, NoTangent, @not_implemented, Tangent, ZeroTangent,
-    AbstractThunk, AbstractTangent
+using ChainRulesCore: ChainRulesCore, unthunk, @thunk, NoTangent, @not_implemented,
+    Tangent, ZeroTangent, AbstractThunk, AbstractTangent
 using Enzyme: Enzyme
 using FiniteDiff: FiniteDiff
 using ForwardDiff: ForwardDiff
@@ -74,6 +74,18 @@ include("derivative_wrappers.jl")
 include("sensitivity_interface.jl")
 include("forward_sensitivity.jl")
 include("adjoint_common.jl")
+
+# RecursiveArrayTools v4 made `AbstractVectorOfArray <: AbstractArray{T,N}`.
+# `AbstractNoiseProcess` is parameterized as N=1 with element type
+# `Vector{T2}`, so the default `ChainRulesCore.ProjectTo(::AbstractArray)`
+# fallback hits `map(ProjectTo, noise)` → calls `getindex(noise, i::Int)`
+# → `noise.W[i][]` (RAT N=1 indexing tries an empty inner index tuple)
+# → BoundsError. The noise process is treated as fixed input by every
+# adjoint path here, so projecting to NoTangent is the right thing and
+# also cuts the bad iteration entirely. This shows up most visibly when
+# Zygote backpropagates through `remake(prob::SDEProblem; noise=Z, ...)`.
+ChainRulesCore.ProjectTo(::DiffEqNoiseProcess.AbstractNoiseProcess) =
+    ChainRulesCore.ProjectTo{ChainRulesCore.NoTangent}()
 include("lss.jl")
 include("nilss.jl")
 include("nilsas.jl")
