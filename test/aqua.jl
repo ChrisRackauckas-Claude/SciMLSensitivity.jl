@@ -1,4 +1,4 @@
-using SciMLSensitivity, Aqua, SciMLBase, ExplicitImports
+using SciMLSensitivity, Aqua, SciMLBase, ChainRulesCore, ExplicitImports
 
 @testset "Aqua" begin
     # find_persistent_tasks_deps may fail on Julia 1.12+ due to OrdinaryDiffEqCore's
@@ -16,6 +16,11 @@ using SciMLSensitivity, Aqua, SciMLBase, ExplicitImports
         treat_as_own = [
             SciMLBase._concrete_solve_adjoint,
             SciMLBase._concrete_solve_forward,
+            # Short-circuit for AbstractNoiseProcess to dodge RAT v4's
+            # broken `getindex(::AbstractVectorOfArray{T,1}, ::Int)`
+            # under the default ProjectTo(::AbstractArray) recursion.
+            # Belongs in SciMLBase/DiffEqNoiseProcess long-term.
+            ChainRulesCore.ProjectTo,
         ]
     )
     Aqua.test_project_extras(SciMLSensitivity)
