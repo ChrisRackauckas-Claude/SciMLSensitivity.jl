@@ -112,35 +112,36 @@ function (f::TrackedAffect)(integrator, event_idx = nothing)
     else
         f.affect!(integrator, event_idx)
     end
-    # VectorContinuousCallback now passes a `Vector{Int8}` of crossing
-    # directions per event component (0 = didn't fire, ±1 = fired with
-    # crossing direction). Translate to the single fired component index
-    # we previously stored. Multiple simultaneous events keep just the
-    # first fired index; this matches what the legacy single-Int dispatch
-    # would have recorded.
-    record_event_idx!(events, idx) = if idx isa AbstractVector
-        i = findfirst(!iszero, idx)
-        i === nothing || push!(events, Int(i))
+    # Old `VectorContinuousCallback` dispatch fired `affect!` once per
+    # fired component with a single `Int` index, producing one
+    # `(t, uleft, pleft, event_idx)` row per fire. New DiffEqBase
+    # dispatch passes the whole `Vector{Int8}` simultaneous-events mask
+    # (0 = didn't fire, ±1 = fired with crossing direction) and only
+    # calls the affect once per step. To keep the adjoint bookkeeping
+    # the same, expand the mask into one row per fired component.
+    fired_indices::Vector{Int} = if event_idx isa AbstractVector
+        Int[Int(i) for i in eachindex(event_idx) if !iszero(event_idx[i])]
+    elseif event_idx === nothing
+        Int[]  # discrete callback; bookkeeping but no event_idx
     else
-        push!(events, idx)
+        Int[event_idx]
     end
     return if integrator.derivative_discontinuity
-        if isempty(f.event_times)
-            push!(f.event_times, integrator.t)
-            push!(f.tprev, integrator.tprev)
-            push!(f.uleft, uleft)
-            push!(f.pleft, pleft)
-            if event_idx !== nothing
-                record_event_idx!(f.event_idx, event_idx)
-            end
-        else
-            if !maximum(.≈(integrator.t, f.event_times, rtol = 0.0, atol = 1.0e-14))
+        already_recorded = !isempty(f.event_times) &&
+            maximum(.≈(integrator.t, f.event_times, rtol = 0.0, atol = 1.0e-14))
+        if !already_recorded
+            if event_idx === nothing
                 push!(f.event_times, integrator.t)
                 push!(f.tprev, integrator.tprev)
                 push!(f.uleft, uleft)
                 push!(f.pleft, pleft)
-                if event_idx !== nothing
-                    record_event_idx!(f.event_idx, event_idx)
+            else
+                for fired_idx in fired_indices
+                    push!(f.event_times, integrator.t)
+                    push!(f.tprev, integrator.tprev)
+                    push!(f.uleft, uleft)
+                    push!(f.pleft, pleft)
+                    push!(f.event_idx, fired_idx)
                 end
             end
         end
