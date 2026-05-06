@@ -77,11 +77,17 @@ end
             out[2] = (u[3] - 10.0)u[3]
         end
         @testset "callback with linear affect" begin
-            function affect!(integrator, idx)
-                if idx == 1
-                    integrator.u[2] = -integrator.p[2] * integrator.u[2]
-                elseif idx == 2
-                    integrator.u[4] = -integrator.p[2] * integrator.u[4]
+            # New VCC convention: affect! is called once per step with the
+            # full `simultaneous_events::Vector{Int8}` (0 = didn't fire,
+            # ±1 = up/down crossing).
+            function affect!(integrator, simultaneous_events)
+                for (idx, dir) in enumerate(simultaneous_events)
+                    iszero(dir) && continue
+                    if idx == 1
+                        integrator.u[2] = -integrator.p[2] * integrator.u[2]
+                    elseif idx == 2
+                        integrator.u[4] = -integrator.p[2] * integrator.u[4]
+                    end
                 end
             end
             cb = VectorContinuousCallback(condition, affect!, 2)
@@ -95,8 +101,10 @@ end
             out[2] = cos(t)
         end
 
-        function affect!(integrator, idx)
-            println("$(idx) triggered!")
+        function affect!(integrator, simultaneous_events)
+            fired = findall(!iszero, simultaneous_events)
+            isempty(fired) && return
+            println("$(fired) triggered!")
             u_new = [0.5, 1.0, 0.0, 0.0]
             integrator.u .= u_new
         end
