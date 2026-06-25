@@ -99,6 +99,7 @@ run_tests(;
         end,
         "Core8" => function ()
             return @testset "Core 8" begin
+                @time @safetestset "Enzyme DefaultInit Repro" include("Core8/enzyme_defaultinit_repro.jl")
                 @time @safetestset "Adjoints through NonlinearProblem" include("Core8/parameter_initialization.jl")
                 @time @safetestset "Initialization with MTK" include("Core8/desauty_dae_mwe.jl")
                 @time @safetestset "MTK Forward Mode" include("Core8/mtk.jl")
