@@ -1817,6 +1817,10 @@ function SciMLBase._concrete_solve_adjoint(
     )
 
     function enzyme_sensitivity_backpass(Δ)
+        # Zygote/ChainRules can hand back a thunked cotangent (e.g. an
+        # `InplaceableThunk`); materialize it so the VectorOfArray/array handling
+        # below applies instead of hitting the unsupported-type `error`.
+        Δ = Δ isa AbstractThunk ? unthunk(Δ) : Δ
         if (Δ isa AbstractArray{<:AbstractArray} || Δ isa AbstractVectorOfArray)
             for (x, y) in zip(shadow_result.u, Δ.u)
                 x .= y
