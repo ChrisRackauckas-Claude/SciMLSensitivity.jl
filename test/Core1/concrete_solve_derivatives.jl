@@ -456,12 +456,12 @@ Tests callable structs with different AD backends
     # does not evaluate its argument, so it cannot hang. See #1510.
     @testset "Mooncake with ReverseDiffAdjoint" begin
         @test_skip gradient_mooncake(senseloss(ReverseDiffAdjoint()), u0p) ≈
-                   ref_grad_senseloss
+            ref_grad_senseloss
     end
 
     @testset "Mooncake with TrackerAdjoint" begin
         @test_skip gradient_mooncake(senseloss(TrackerAdjoint()), u0p) ≈
-                   ref_grad_senseloss
+            ref_grad_senseloss
     end
 
     # Test with p-only differentiation (senseloss3 and senseloss4 from alternative_ad_frontend.jl)
@@ -504,7 +504,7 @@ Tests callable structs with different AD backends
     # side — chalk-lab/Mooncake.jl#1208. Skipped permanently. See #1510.
     @testset "Mooncake with ForwardSensitivity (p-only)" begin
         @test_skip gradient_mooncake(senseloss_p(ForwardSensitivity()), p_only) ≈
-                   ref_grad_p
+            ref_grad_p
     end
 end
 
