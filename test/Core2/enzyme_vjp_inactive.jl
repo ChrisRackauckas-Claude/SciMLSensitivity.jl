@@ -62,4 +62,15 @@ using Test, SciMLSensitivity, Enzyme, Reactant
         )
         @test dx ≈ [4.0, 3.0]
     end
+
+    # Test 4: `automatic_sensealg_choice` is inactive to Enzyme.
+    # The sensealg selection probes candidate VJP backends inside try/catch and
+    # returns a discrete algorithm choice, so it must not be differentiated. This
+    # is required for forward-over-reverse (nested Enzyme), where the outer
+    # forward pass would otherwise type-analyze the Union-typed probing code and
+    # fail with an IllegalTypeAnalysisException (SciMLSensitivity issue #1427).
+    @testset "automatic_sensealg_choice inactive" begin
+        @test Enzyme.EnzymeRules.inactive(SciMLSensitivity.automatic_sensealg_choice) ===
+            nothing
+    end
 end
