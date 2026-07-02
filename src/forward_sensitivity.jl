@@ -766,9 +766,13 @@ end
 function extract_local_sensitivities(sol, ::ForwardDiffSensitivity, ::Val{false})
     u = ForwardDiff.value.(sol)
     du_full = ForwardDiff.partials.(sol)
-    firststate = first(du_full)
-    firstparam = first(firststate)
-    Js = map(1:length(firstparam)) do j
+    # `du_full` is the (flat) array of `ForwardDiff.Partials` — RecursiveArrayTools 4
+    # broadcasts `sol` over its scalar elements, so `first(du_full)` is already a
+    # `Partials`, and the number of sensitivity parameters is its length (not
+    # `length(first(first(du_full)))`, which used to reach a `Partials` through the
+    # old nested vector-of-vectors layout and now returns a scalar's length, 1).
+    nparams = length(first(du_full))
+    Js = map(1:nparams) do j
         map(CartesianIndices(du_full)) do II
             du_full[II][j]
         end
