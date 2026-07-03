@@ -1,6 +1,6 @@
 name = "SciMLSensitivity"
 uuid = "1ed8b502-d754-442c-8d5d-10ac956f44a1"
-version = "7.113.0"
+version = "7.113.1"
 authors = ["Christopher Rackauckas <accounts@chrisrackauckas.com>", "Yingbo Ma <mayingbo5@gmail.com>"]
 
 [deps]
@@ -89,7 +89,7 @@ Logging = "1.10"
 Lux = "1.14"
 Markdown = "1.10"
 ModelingToolkit = "11.23"
-Mooncake = "0.5.25"
+Mooncake = "0.5.36"
 Reactant = "0.2.203"
 NLsolve = "4.5.1"
 NonlinearSolve = "4.19.1"
