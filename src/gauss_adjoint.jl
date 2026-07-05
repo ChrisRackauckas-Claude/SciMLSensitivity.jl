@@ -1,6 +1,6 @@
 mutable struct GaussIntegrand{
         pType, uType, lType, rateType, S, PF, PJC, PJT, DGP,
-        G, SAlg <: AbstractGAdjoint, tType, rType,
+        G, SAlg <: AbstractGAdjoint, tType, rType, UF,
     }
     sol::S
     p::pType
@@ -15,6 +15,10 @@ mutable struct GaussIntegrand{
     dgdp::G
     tunables::tType
     repack::rType
+    # `unwrapped_f(sol.prob.f)` hoisted to construction: digging the function
+    # out of a FunctionWrappersWrapper is dynamic and would otherwise dominate
+    # every `vec_pjac!` call.
+    unwrappedf::UF
 end
 
 struct ODEGaussAdjointSensitivityFunction{
@@ -616,7 +620,7 @@ function GaussIntegrand(sol, sensealg, checkpoints, dgdp = nothing)
 
     return GaussIntegrand(
         cpsol, p, y, λ, pf, f_cache, pJ, paramjac_config,
-        sensealg, dgdp_cache, dgdp, tunables, repack
+        sensealg, dgdp_cache, dgdp, tunables, repack, unwrappedf
     )
 end
 
@@ -629,7 +633,7 @@ end
 function vec_pjac!(out, λ, y, t, S::GaussIntegrand)
     (; pJ, pf, p, f_cache, dgdp_cache, paramjac_config, sensealg, sol, tunables, repack) = S
     _odef = sol.prob.f
-    f = unwrapped_f(_odef)
+    f = S.unwrappedf
     isautojacvec = get_jacvec(sensealg)
 
     # Priority: vjp_p > paramjac > autojacvec dispatch.

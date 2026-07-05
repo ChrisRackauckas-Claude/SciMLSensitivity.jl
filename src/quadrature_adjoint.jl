@@ -215,7 +215,7 @@ end
 
 struct AdjointSensitivityIntegrand{
         pType, uType, lType, rateType, S, AS, PF, PJC, PJT, DGP,
-        G, tType, rType,
+        G, tType, rType, UF,
     }
     sol::S
     adj_sol::AS
@@ -231,6 +231,10 @@ struct AdjointSensitivityIntegrand{
     dgdp::G
     tunables::tType
     repack::rType
+    # `unwrapped_f(sol.prob.f)` hoisted to construction: digging the function
+    # out of a FunctionWrappersWrapper is dynamic and would otherwise dominate
+    # every `vec_pjac!` call.
+    unwrappedf::UF
 end
 
 function AdjointSensitivityIntegrand(sol, adj_sol, sensealg, dgdp = nothing)
@@ -323,7 +327,7 @@ function AdjointSensitivityIntegrand(sol, adj_sol, sensealg, dgdp = nothing)
     end
     return AdjointSensitivityIntegrand(
         sol, adj_sol, p, y, λ, pf, f_cache, pJ, paramjac_config,
-        sensealg, dgdp_cache, dgdp, tunables, repack
+        sensealg, dgdp_cache, dgdp, tunables, repack, unwrappedf
     )
 end
 
@@ -341,7 +345,7 @@ _enzyme_vecpjac_dot(f, repack, y, tunables, t, λ) = dot(vec(f(y, repack(tunable
 function vec_pjac!(out, λ, y, t, S::AdjointSensitivityIntegrand)
     (; pJ, pf, p, f_cache, dgdp_cache, paramjac_config, sensealg, sol, adj_sol, tunables, repack) = S
     _odef = sol.prob.f
-    f = unwrapped_f(_odef)
+    f = S.unwrappedf
 
     # Priority: vjp_p > paramjac > autojacvec dispatch.
     if SciMLBase.has_vjp_p(_odef)
@@ -635,7 +639,7 @@ end
 function update_p_integrand(integrand::AdjointSensitivityIntegrand, p)
     (;
         sol, adj_sol, y, λ, pf, f_cache, pJ, paramjac_config,
-        sensealg, dgdp_cache, dgdp,
+        sensealg, dgdp_cache, dgdp, unwrappedf,
     ) = integrand
     _use_full_p = hasproperty(sensealg, :diff_tunables) &&
         sensealg.diff_tunables isa Val{false} &&
@@ -649,7 +653,7 @@ function update_p_integrand(integrand::AdjointSensitivityIntegrand, p)
     end
     return AdjointSensitivityIntegrand(
         sol, adj_sol, p, y, λ, pf, f_cache, pJ, paramjac_config,
-        sensealg, dgdp_cache, dgdp, tunables, repack
+        sensealg, dgdp_cache, dgdp, tunables, repack, unwrappedf
     )
 end
 
