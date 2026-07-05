@@ -1030,11 +1030,12 @@ function _vecjacobian!(
     Enzyme.remake_zero!(tmp1) # should be removed for dλ
     vec(ytmp) .= vec(y)
 
-    #if dgrad !== nothing
-    #  tmp2 = dgrad
-    #else
+    # When the caller does not request a parameter gradient (`dgrad === nothing`,
+    # as in the Gauss/Quadrature adjoint rhs on every solver stage), mark `p`
+    # `Const` so Enzyme skips the parameter-gradient accumulation entirely,
+    # matching the out-of-place wrapper above.
     _shadow_p = nothing
-    dup = if !(tmp2 isa SciMLBase.NullParameters)
+    dup = if dgrad !== nothing && !(tmp2 isa SciMLBase.NullParameters)
         # tmp2 .= 0
         Enzyme.remake_zero!(tmp2)
         if _cached_shadow isa EnzymeViewPrimalBuffer
