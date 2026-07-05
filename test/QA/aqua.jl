@@ -73,7 +73,7 @@ run_qa(
                 # EnzymeCore
                 :Mode,
                 # EnzymeCore.EnzymeRules
-                :inactive_type,
+                :inactive_type, :inactive,
                 # FiniteDiff
                 :DerivativeCache, :GradientCache, :JacobianCache,
                 :finite_difference_derivative!, :finite_difference_gradient!,
