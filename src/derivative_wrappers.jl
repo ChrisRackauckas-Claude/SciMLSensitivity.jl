@@ -1030,11 +1030,21 @@ function _vecjacobian!(
     Enzyme.remake_zero!(tmp1) # should be removed for dλ
     vec(ytmp) .= vec(y)
 
-    #if dgrad !== nothing
-    #  tmp2 = dgrad
-    #else
+    # When the caller does not request a parameter gradient (`dgrad === nothing`,
+    # as in the Gauss/Quadrature adjoint rhs on every solver stage), mark `p`
+    # `Const` so Enzyme skips the parameter-gradient accumulation entirely,
+    # matching the out-of-place wrapper above. This is only sound when the mode
+    # has runtime activity: under static activity analysis, an rhs that stores
+    # `p`-derived array references into active computation (e.g. a Lux layer
+    # reshaping a `ComponentArray`'s weights) raises `EnzymeRuntimeActivityError`
+    # — or worse, silently drops gradient terms — once `p` is `Const`. So the
+    # demotion is gated on `runtime_activity(mode)` (already enabled on the
+    # automatically selected `EnzymeVJP`) rather than forcing runtime activity
+    # on, which measurably slows small right-hand sides.
+    _skip_p_grad = dgrad === nothing &&
+        Enzyme.EnzymeCore.runtime_activity(isautojacvec.mode)
     _shadow_p = nothing
-    dup = if !(tmp2 isa SciMLBase.NullParameters)
+    dup = if !_skip_p_grad && !(tmp2 isa SciMLBase.NullParameters)
         # tmp2 .= 0
         Enzyme.remake_zero!(tmp2)
         if _cached_shadow isa EnzymeViewPrimalBuffer
@@ -1068,9 +1078,7 @@ function _vecjacobian!(
     #end
 
     vec(tmp4) .= vec(λ)
-    isautojacvec = get_jacvec(sensealg)
-    # Extract Enzyme mode from EnzymeVJP or use default Enzyme.Reverse
-    enzyme_mode = isautojacvec isa EnzymeVJP ? isautojacvec.mode : Enzyme.Reverse
+    enzyme_mode = isautojacvec.mode
 
     if inplace_sensitivity(S)
         Enzyme.remake_zero!(_tmp6)
