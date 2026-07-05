@@ -1,18 +1,24 @@
 # Allocation regression tests for the continuous adjoints.
-
 #
-# Guards the two properties measured on master (Julia 1.10, Enzyme 0.13):
-#   1. The per-call ceilings of the adjoint inner loops (vec_pjac! /
-#      the Gauss integrand) with EnzymeVJP.
+# Guards three properties measured on Julia 1.10 / Enzyme 0.13:
+#   1. The per-call allocation ceiling of the GaussAdjoint inner loop
+#      (`vec_pjac!`) with EnzymeVJP.
 #   2. The per-step allocation slope of full adjoint solves: allocations must
 #      not grow faster than the recorded slope with integration length —
 #      catches any accidentally introduced per-step/per-stage allocation.
-#   3. With `dgrad === nothing` (Gauss/Quadrature adjoint rhs), the parameter
-#      shadow buffer must remain untouched — proves Enzyme is not computing a
-#      discarded parameter gradient on every solver stage.
+#   3. With `dgrad === nothing` (Gauss/Quadrature adjoint rhs) and a
+#      runtime-activity mode, the parameter shadow buffer must remain
+#      untouched — proves Enzyme receives `Const(p)` and is not computing a
+#      discarded parameter gradient on every stage. With the default static
+#      mode the shadow must be written (`Duplicated` kept; the demotion is
+#      unsound there).
+#
+# 1 and 2 count allocations, which is meaningless under coverage
+# instrumentation, so they are skipped when coverage is active. 3 is a
+# behavioral check and always runs.
 using SciMLSensitivity, OrdinaryDiffEq, LinearAlgebra, Test
+using Enzyme
 
-# Allocation counts are meaningless under coverage instrumentation.
 coverage_on = Base.JLOptions().code_coverage != 0
 
 function lv!(du, u, p, t)
@@ -39,10 +45,10 @@ function adjoint_allocs(T, sa)
 end
 
 @testset "adjoint allocation regressions" begin
-    if coverage_on
-        @info "coverage instrumentation active — skipping allocation regression tests"
-    else
-        @testset "per-call ceiling: GaussIntegrand vec_pjac! (EnzymeVJP)" begin
+    @testset "per-call ceiling: GaussIntegrand vec_pjac! (EnzymeVJP)" begin
+        if coverage_on
+            @info "coverage active — skipping vec_pjac! allocation ceiling"
+        else
             sol = fwdsol(10.0)
             sa = GaussAdjoint(autojacvec = EnzymeVJP())
             S = SciMLSensitivity.GaussIntegrand(sol, sa, collect(sol.t), nothing)
@@ -54,10 +60,14 @@ end
             # Julia 1.10 / Enzyme 0.13; the ceiling leaves 2x headroom.
             @test a <= 128
         end
+    end
 
-        @testset "per-step slope of full adjoint solves" begin
+    @testset "per-step slope of full adjoint solves" begin
+        if coverage_on
+            @info "coverage active — skipping adjoint allocation slope"
+        else
             # slope = (allocs(T=100) - allocs(T=10)) / (fwd-steps difference).
-            # Measured on master: Gauss+Enzyme ~24 B/step, Interp+Enzyme 0 B/step.
+            # Measured: Gauss+Enzyme ~24 B/step, Interp+Enzyme 0 B/step.
             for (name, sa, ceiling) in [
                     ("Gauss+EnzymeVJP", GaussAdjoint(autojacvec = EnzymeVJP()), 64.0),
                     ("Interp+EnzymeVJP", InterpolatingAdjoint(autojacvec = EnzymeVJP()), 8.0),
@@ -68,14 +78,20 @@ end
                 @test slope <= ceiling
             end
         end
+    end
 
-        @testset "dgrad === nothing skips the parameter gradient (EnzymeVJP)" begin
-            # The Gauss/Quadrature adjoint rhs calls vecjacobian! without dgrad on
-            # every solver stage; Enzyme must receive `Const(p)` there. If the
-            # parameter shadow were passed as `Duplicated`, it would be zeroed and
-            # written each call — the NaN sentinel would not survive.
+    @testset "dgrad === nothing skips the parameter gradient (EnzymeVJP)" begin
+        # The Gauss/Quadrature adjoint rhs calls vecjacobian! without dgrad on
+        # every solver stage. With a runtime-activity mode Enzyme must receive
+        # `Const(p)` there: if the parameter shadow were passed as
+        # `Duplicated`, it would be zeroed and written each call — the NaN
+        # sentinel would not survive. With the default static mode the
+        # demotion is unsound (p-derived array references stored into active
+        # computation), so `Duplicated` must be kept and the shadow written.
+        # Behavioral check, runs under coverage too.
+        function sentinel_survives(vjp)
             sol = fwdsol(10.0)
-            sa = GaussAdjoint(autojacvec = EnzymeVJP())
+            sa = GaussAdjoint(autojacvec = vjp)
             adj_prob, _, _ = SciMLSensitivity.ODEAdjointProblem(
                 sol, sa, Tsit5(),
                 SciMLSensitivity.GaussIntegrand(sol, sa, collect(sol.t), nothing),
@@ -87,8 +103,15 @@ end
             SciMLSensitivity.vecjacobian!(dλ, y, λ, sol.prob.p, sol.t[10], S)
             fill!(tmp2, NaN)
             SciMLSensitivity.vecjacobian!(dλ, y, λ, sol.prob.p, sol.t[10], S)
-            @test all(isnan, tmp2)
-            @test all(isfinite, dλ)
+            return all(isnan, tmp2), all(isfinite, dλ)
         end
+        surv_rta, finite_rta = sentinel_survives(
+            EnzymeVJP(mode = Enzyme.set_runtime_activity(Enzyme.Reverse))
+        )
+        @test surv_rta
+        @test finite_rta
+        surv_static, finite_static = sentinel_survives(EnzymeVJP())
+        @test !surv_static  # static mode keeps Duplicated(p, shadow)
+        @test finite_static
     end
 end
