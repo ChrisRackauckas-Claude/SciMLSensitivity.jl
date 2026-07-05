@@ -56,9 +56,9 @@ end
             SciMLSensitivity.vec_pjac!(out, λ, y, t, S)
             SciMLSensitivity.vec_pjac!(out, λ, y, t, S)
             a = minimum(@allocated(SciMLSensitivity.vec_pjac!(out, λ, y, t, S)) for _ in 1:5)
-            # measured 64 B (3 small allocs inside Enzyme.autodiff) on
-            # Julia 1.10 / Enzyme 0.13; the ceiling leaves 2x headroom.
-            @test a <= 128
+            # the warmed vec_pjac! inner loop is allocation-free: the Enzyme
+            # call itself is 0 B and `unwrapped_f` is hoisted to construction.
+            @test a == 0
         end
     end
 
@@ -67,9 +67,10 @@ end
             @info "coverage active — skipping adjoint allocation slope"
         else
             # slope = (allocs(T=100) - allocs(T=10)) / (fwd-steps difference).
-            # Measured: Gauss+Enzyme ~24 B/step, Interp+Enzyme 0 B/step.
+            # Both inner loops are allocation-free; the ceiling only leaves
+            # room for measurement noise.
             for (name, sa, ceiling) in [
-                    ("Gauss+EnzymeVJP", GaussAdjoint(autojacvec = EnzymeVJP()), 64.0),
+                    ("Gauss+EnzymeVJP", GaussAdjoint(autojacvec = EnzymeVJP()), 8.0),
                     ("Interp+EnzymeVJP", InterpolatingAdjoint(autojacvec = EnzymeVJP()), 8.0),
                 ]
                 a10, n10 = adjoint_allocs(10.0, sa)
