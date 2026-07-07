@@ -81,7 +81,7 @@ end
 We use `Optimization.solve` to optimize the parameters for our loss function:
 
 ```@example dde
-adtype = OPT.AutoEnzyme()
+adtype = OPT.AutoEnzyme(; mode = Enzyme.set_runtime_activity(Enzyme.Reverse))
 optf = OPT.OptimizationFunction((x, p) -> loss_dde(x), adtype)
 optprob = OPT.OptimizationProblem(optf, p)
 result_dde = OPT.solve(optprob, OPA.PolyOpt(); callback)
