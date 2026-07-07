@@ -62,7 +62,7 @@ callback = function (state, l)
     l < 0.01
 end
 
-adtype = OPT.AutoEnzyme()
+adtype = OPT.AutoEnzyme(; mode = Enzyme.set_runtime_activity(Enzyme.Reverse))
 optf = OPT.OptimizationFunction((x, p) -> loss_n_ode(x), adtype)
 optprob = OPT.OptimizationProblem(optf, ps)
 
