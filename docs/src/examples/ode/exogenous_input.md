@@ -94,7 +94,7 @@ function loss(p)
     return sum(abs2.(y[1:N] .- sol')) / N
 end
 
-adtype = OPT.AutoEnzyme()
+adtype = OPT.AutoEnzyme(; mode = Enzyme.set_runtime_activity(Enzyme.Reverse))
 optf = OPT.OptimizationFunction((x, p) -> loss(x), adtype)
 optprob = OPT.OptimizationProblem(optf, CA.ComponentArray{Float64}(p_model))
 
