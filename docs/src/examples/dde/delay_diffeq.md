@@ -51,7 +51,7 @@ callback = function (state, l; doplot = false)
     return false
 end
 
-adtype = OPT.AutoEnzyme()
+adtype = OPT.AutoEnzyme(; mode = Enzyme.set_runtime_activity(Enzyme.Reverse))
 optf = OPT.OptimizationFunction((x, p) -> loss_dde(x), adtype)
 optprob = OPT.OptimizationProblem(optf, p)
 result_dde = OPT.solve(optprob, OPA.PolyOpt(); maxiters = 300, callback)
