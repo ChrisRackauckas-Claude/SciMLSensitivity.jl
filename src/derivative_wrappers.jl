@@ -8,16 +8,6 @@ end
 
 (ff::UGradientWrapper)(uprev) = ff.f(uprev, ff.p, ff.t)
 
-@generated function _enzyme_runtime_activity_enabled(mode::M) where {M}
-    enabled = try
-        m = M()
-        m == Enzyme.set_runtime_activity(m)
-    catch
-        false
-    end
-    return enabled ? :(true) : :(false)
-end
-
 mutable struct ParamGradientWrapper{fType, tType, uType} <: Function
     f::fType
     t::tType
@@ -1052,7 +1042,7 @@ function _vecjacobian!(
     # selected `EnzymeVJP`) rather than forcing runtime activity
     # on, which measurably slows small right-hand sides.
     _skip_p_grad = dgrad === nothing &&
-        _enzyme_runtime_activity_enabled(isautojacvec.mode)
+        Enzyme.runtime_activity(isautojacvec.mode)
     _shadow_p = nothing
     dup = if !_skip_p_grad && !(tmp2 isa SciMLBase.NullParameters)
         # tmp2 .= 0
