@@ -64,8 +64,93 @@ using Random: Random, rand!
 using SparseArrays: SparseArrays
 using Statistics: Statistics, mean
 
+"""
+    SensitivityFunction
+
+Abstract supertype for the internal right-hand-side functions used by
+SciMLSensitivity adjoint and callback sensitivity problems.
+
+Concrete subtypes carry the forward solution, cost-function derivatives,
+algorithm choice, and derivative caches needed by the generated sensitivity
+`ODEProblem`, `SDEProblem`, or `RODEProblem`. This is developer API for
+SciMLSensitivity and SciML solver integrations; users normally select a
+`sensealg` through `solve` or construct one of the documented sensitivity
+problem wrappers instead.
+"""
 abstract type SensitivityFunction end
+
+"""
+    TransformedFunction
+
+Abstract supertype for transformed differential-equation functions used inside
+SciMLSensitivity.
+
+Concrete subtypes adapt a user-supplied model into the drift or sensitivity
+form required by a sensitivity algorithm. This is developer API for
+SciMLSensitivity internals and extensions; it is not a user-facing modeling
+interface.
+"""
 abstract type TransformedFunction end
+
+"""
+    ODEAdjointProblem(sol, sensealg, alg, t=nothing,
+        dgdu_discrete=nothing, dgdp_discrete=nothing,
+        dgdu_continuous=nothing, dgdp_continuous=nothing, g=nothing; kwargs...)
+
+Construct the reverse-time `ODEProblem` used by continuous adjoint sensitivity
+algorithms.
+
+## Arguments
+
+  - `sol`: forward solution whose problem, trajectory, and parameters define the
+    adjoint system.
+  - `sensealg`: adjoint sensitivity algorithm, such as `BacksolveAdjoint`,
+    `InterpolatingAdjoint`, `QuadratureAdjoint`, or `GaussAdjoint`.
+  - `alg`: differential-equation solver algorithm used for the adjoint solve.
+  - `t`: saved time points for discrete costs. Use `nothing` for a continuous
+    cost.
+  - `dgdu_discrete`, `dgdp_discrete`: derivatives of a discrete cost at the
+    saved points.
+  - `dgdu_continuous`, `dgdp_continuous`: derivatives of a continuous cost
+    integrand.
+  - `g`: optional scalar cost function used when derivative callbacks are not
+    supplied.
+
+## Returns
+
+An `ODEProblem` whose state contains adjoint variables and parameter-gradient
+accumulators. Some internal methods can also return callback bookkeeping when
+requested by SciMLSensitivity internals.
+"""
+function ODEAdjointProblem end
+
+"""
+    SDEAdjointProblem(sol, sensealg, alg, t=nothing,
+        dgdu_discrete=nothing, dgdp_discrete=nothing,
+        dgdu_continuous=nothing, dgdp_continuous=nothing, g=nothing; kwargs...)
+
+Construct the reverse-time `SDEProblem` used by continuous adjoint sensitivity
+algorithms for stochastic differential equations.
+
+The arguments mirror `ODEAdjointProblem`. For Ito problems the drift is
+internally transformed to the adjoint-compatible form; Stratonovich problems use
+the original drift interpretation.
+"""
+function SDEAdjointProblem end
+
+"""
+    RODEAdjointProblem(sol, sensealg, alg, t=nothing,
+        dgdu_discrete=nothing, dgdp_discrete=nothing,
+        dgdu_continuous=nothing, dgdp_continuous=nothing, g=nothing; kwargs...)
+
+Construct the reverse-time `RODEProblem` used by continuous adjoint sensitivity
+algorithms for random ordinary differential equations.
+
+The arguments mirror `ODEAdjointProblem`. The returned problem reuses the
+forward solution noise process in reverse order and augments the state with
+adjoint and parameter-gradient variables.
+"""
+function RODEAdjointProblem end
 
 include("utils.jl")
 include("parameters_handling.jl")

@@ -40,6 +40,31 @@ function QuadratureCache(u0, M, nseg, numparams)
     )
 end
 
+"""
+    NILSASProblem(sol, sensealg::NILSAS, alg; kwargs...)
+
+Problem wrapper for non-intrusive least-squares adjoint shadowing
+sensitivities.
+
+## Arguments
+
+  - `sol`: forward solution of the ODE problem.
+  - `sensealg`: `NILSAS` algorithm choice.
+  - `alg`: solver algorithm used for the segmented adjoint solves.
+
+## Keyword Arguments
+
+  - `dgdu_continuous`, `dgdp_continuous`: derivatives of the continuous
+    objective.
+  - `g`: scalar observable; required by `NILSAS`.
+
+`NILSAS` currently rejects discrete cost functions.
+
+## Returns
+
+A `NILSASProblem` containing the adjoint segment problem, terminal conditions,
+quadrature cache, and work arrays consumed by `shadow_adjoint`.
+"""
 struct NILSASProblem{A, NILSS, Aprob, Qcache, solType, z0Type, tType, G, T, DG1, DG2}
     sensealg::A
     nilss::NILSS # diffcache

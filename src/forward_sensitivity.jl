@@ -1,11 +1,27 @@
 """
 ODEForwardSensitivityFunction{iip,F,A,Tt,OJ,J,JP,S,PJ,TW,TWt,UF,PF,JC,PJC,Alg,fc,JM,pJM,MM,CV} <: AbstractODEFunction{iip}
 
-ODEForwardSensitivityFunction is an internal to the ODEForwardSensitivityProblem which extends the AbstractODEFunction
-to be used in an ODEProblem, but defines the tools requires for calculating the extra differential equations associated
-with the derivative terms.
+Developer-facing `AbstractODEFunction` used by `ODEForwardSensitivityProblem`
+to append local forward sensitivity equations to an ODE.
 
-ODEForwardSensitivityFunction is not intended to be part of the public API.
+## Fields
+
+The fields store the primal ODE function, Jacobian and parameter-Jacobian
+definitions or AD caches, sensitivity algorithm choice, dimensions, temporary
+Jacobian buffers, mass matrix, and sparsity/coloring metadata.
+
+## Usage
+
+Users normally construct an `ODEForwardSensitivityProblem` instead of this type
+directly:
+
+```julia
+prob = ODEForwardSensitivityProblem(f, u0, tspan, p;
+    sensealg = ForwardSensitivity())
+```
+
+This type is exported for compatibility and extension code that needs to inspect
+or rebuild the generated `ODEFunction`.
 """
 struct ODEForwardSensitivityFunction{
         iip, F, A, Tt, OJ, J, JP, S, PJ, TW, TWt, UF, PF, JC,
@@ -211,6 +227,11 @@ end
     args...;
     kwargs...
 )
+@doc """
+    ODELocalSensitivityProblem(args...; kwargs...)
+
+Deprecated alias for `ODEForwardSensitivityProblem`.
+""" ODELocalSensitivityProblem
 
 struct ODEForwardSensitivityProblem{iip, A}
     sensealg::A

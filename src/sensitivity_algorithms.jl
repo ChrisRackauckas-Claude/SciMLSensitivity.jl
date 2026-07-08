@@ -1,3 +1,13 @@
+"""
+    SensitivityAlg(args...; kwargs...)
+
+Deprecated sensitivity-algorithm selector.
+
+SciMLSensitivity now uses explicit sensitivity algorithm types such as
+`ForwardSensitivity`, `GaussAdjoint`, `InterpolatingAdjoint`, and
+`SteadyStateAdjoint`. Calling `SensitivityAlg` emits an error message directing
+users to the current sensitivity documentation.
+"""
 function SensitivityAlg(args...; kwargs...)
     return @error("The SensitivityAlg choice mechanism was completely overhauled. Please consult the local sensitivity documentation for more information")
 end

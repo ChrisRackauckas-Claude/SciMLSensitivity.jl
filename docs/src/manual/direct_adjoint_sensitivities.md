@@ -4,6 +4,12 @@
 
 ```@docs
 adjoint_sensitivities
+ODEAdjointProblem
+SDEAdjointProblem
+RODEAdjointProblem
+AdjointSensitivityIntegrand
+SensitivityFunction
+StochasticTransformedFunction
 ```
 
 ## Second Order Adjoint Sensitivities
