@@ -8,6 +8,16 @@ end
 
 (ff::UGradientWrapper)(uprev) = ff.f(uprev, ff.p, ff.t)
 
+@generated function _enzyme_runtime_activity_enabled(mode::M) where {M}
+    enabled = try
+        m = M()
+        m == Enzyme.set_runtime_activity(m)
+    catch
+        false
+    end
+    return enabled ? :(true) : :(false)
+end
+
 mutable struct ParamGradientWrapper{fType, tType, uType} <: Function
     f::fType
     t::tType
@@ -1038,11 +1048,11 @@ function _vecjacobian!(
     # `p`-derived array references into active computation (e.g. a Lux layer
     # reshaping a `ComponentArray`'s weights) raises `EnzymeRuntimeActivityError`
     # — or worse, silently drops gradient terms — once `p` is `Const`. So the
-    # demotion is gated on `runtime_activity(mode)` (already enabled on the
-    # automatically selected `EnzymeVJP`) rather than forcing runtime activity
+    # demotion is gated on runtime activity (already enabled on the automatically
+    # selected `EnzymeVJP`) rather than forcing runtime activity
     # on, which measurably slows small right-hand sides.
     _skip_p_grad = dgrad === nothing &&
-        Enzyme.EnzymeCore.runtime_activity(isautojacvec.mode)
+        _enzyme_runtime_activity_enabled(isautojacvec.mode)
     _shadow_p = nothing
     dup = if !_skip_p_grad && !(tmp2 isa SciMLBase.NullParameters)
         # tmp2 .= 0
