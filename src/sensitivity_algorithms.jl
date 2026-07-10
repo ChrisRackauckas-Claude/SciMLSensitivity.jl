@@ -723,6 +723,105 @@ AbstractGAdjoint = Union{GaussAdjoint, GaussKronrodAdjoint}
 
 """
 ```julia
+SundialsAdjoint{CS, AD, FDT, VJP} <: AbstractAdjointSensitivityAlgorithm{CS, AD, FDT}
+```
+
+An implementation of adjoint sensitivity analysis which uses the SUNDIALS CVODES
+C adjoint interface (`CVodeAdjInit`/`CVodeF`/`CVodeB`). The forward pass is
+re-integrated by CVODES with checkpointing, the backward (adjoint) pass is
+integrated by CVODES with its checkpoint-based interpolation of the forward
+solution, and the parameter gradient is accumulated by the CVODES backward
+quadrature integration. Vector-Jacobian products inside the backward pass are
+computed with the standard SciMLSensitivity `autojacvec` machinery.
+
+This method requires `using Sundials` and a Sundials.jl CVODES-compatible
+solver, i.e. `CVODE_BDF` or `CVODE_Adams`, both for the forward `solve` and as
+the `alg` argument of `adjoint_sensitivities`. Using any other solver throws an
+error.
+
+## Constructor
+
+```julia
+SundialsAdjoint(; chunk_size = 0, autodiff = true,
+    diff_type = Val{:central},
+    autojacvec = nothing,
+    steps = 150,
+    interp = :hermite)
+```
+
+## Keyword Arguments
+
+  - `autodiff`: Use automatic differentiation for constructing the Jacobian
+    if the Jacobian needs to be constructed. Defaults to `true`.
+
+  - `chunk_size`: Chunk size for forward-mode differentiation if full Jacobians are
+    built (`autojacvec=false` and `autodiff=true`). Default is `0` for automatic
+    choice of chunk size.
+  - `diff_type`: The method used by FiniteDiff.jl for constructing the Jacobian
+    if the full Jacobian is required with `autodiff=false`.
+  - `autojacvec`: Calculate the vector-Jacobian product (`J'*v`) via automatic
+    differentiation with special seeding. The total set of choices are:
+
+      + `nothing`: uses an automatic algorithm to automatically choose the vjp.
+        This is the default and recommended for most users.
+      + `false`: the Jacobian is constructed via the `autodiff` choice
+        (ForwardDiff.jl or FiniteDiff.jl).
+      + `ZygoteVJP`: Uses Zygote.jl for the vjp.
+      + `EnzymeVJP`: Uses Enzyme.jl for the vjp.
+      + `ReverseDiffVJP(compile=false)`: Uses ReverseDiff.jl for the vjp. `compile`
+        is a boolean for whether to precompile the tape, which should only be done
+        if there are no branches (`if` or `while` statements) in the `f` function.
+  - `steps`: the number of forward integration steps between two consecutive
+    CVODES checkpoints (the `Nd` argument of `CVodeAdjInit`). Defaults to `150`.
+  - `interp`: the CVODES checkpoint interpolation scheme, either `:hermite`
+    (cubic Hermite, `CV_HERMITE`) or `:polynomial` (variable-degree polynomial,
+    `CV_POLYNOMIAL`). Defaults to `:hermite`.
+
+## SciMLProblem Support
+
+This `sensealg` only supports `ODEProblem`s without callbacks (events) and only
+supports discrete cost functionals (which is what reverse-mode AD of `solve`
+uses). The state and time types must be `Float64` (a SUNDIALS requirement), and
+mass matrices are not supported.
+
+## References
+
+Hindmarsh, A. C. and Brown, P. N. and Grant, K. E. and Lee, S. L. and Serban, R.
+and Shumaker, D. E. and Woodward, C. S., SUNDIALS: Suite of nonlinear and
+differential/algebraic equation solvers, ACM Transactions on Mathematical
+Software (TOMS), 31, pp:363–396 (2005)
+
+Serban, R. and Hindmarsh, A. C., CVODES: The Sensitivity-Enabled ODE Solver in
+SUNDIALS, Proceedings of IDETC/CIE (2005)
+"""
+struct SundialsAdjoint{CS, AD, FDT, VJP} <:
+    AbstractAdjointSensitivityAlgorithm{CS, AD, FDT}
+    autojacvec::VJP
+    steps::Int
+    interp::Symbol
+end
+Base.@pure function SundialsAdjoint(;
+        chunk_size = 0, autodiff = true,
+        diff_type = Val{:central},
+        autojacvec = nothing,
+        steps = 150,
+        interp = :hermite
+    )
+    interp in (:hermite, :polynomial) ||
+        error("SundialsAdjoint `interp` must be `:hermite` or `:polynomial`, got `$(interp)`.")
+    SundialsAdjoint{chunk_size, autodiff, diff_type, typeof(autojacvec)}(
+        autojacvec, steps, interp
+    )
+end
+
+function setvjp(sensealg::SundialsAdjoint{CS, AD, FDT}, vjp) where {CS, AD, FDT}
+    return SundialsAdjoint{CS, AD, FDT, typeof(vjp)}(
+        vjp, sensealg.steps, sensealg.interp
+    )
+end
+
+"""
+```julia
 TrackerAdjoint <: AbstractAdjointSensitivityAlgorithm{nothing, true, nothing}
 ```
 
