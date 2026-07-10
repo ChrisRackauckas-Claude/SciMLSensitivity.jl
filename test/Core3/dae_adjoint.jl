@@ -2,7 +2,7 @@ using OrdinaryDiffEq, SciMLSensitivity, ForwardDiff, Zygote, SciMLBase, Test
 using OrdinaryDiffEqBDF: DFBDF, DImplicitEuler
 
 # Fully implicit DAEProblem adjoints via the augmented adjoint DAE
-# (Cao, Li, Petzold & Serban, SIAM J. Sci. Comput. 24(3), 2003).
+# (Cao, Li, Petzold & Serban, SIAM Journal on Scientific Computing 24(3), 2003).
 
 sumsq_dg(out, u, p, t, i) = (out .= u) # g_i = sum(u.^2)/2 at each data point
 

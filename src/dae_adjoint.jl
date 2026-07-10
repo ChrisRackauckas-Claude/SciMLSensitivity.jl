@@ -4,7 +4,7 @@
 #
 # following the augmented adjoint DAE formulation of Cao, Li, Petzold & Serban,
 # "Adjoint sensitivity analysis for differential-algebraic equations: The adjoint
-# DAE system and its numerical solution", SIAM J. Sci. Comput. 24(3), 2003.
+# DAE system and its numerical solution", SIAM Journal on Scientific Computing 24(3), 2003.
 #
 # For a cost functional G(p) = ∫ g(u, p, t) dt (discrete contributions are handled
 # as Dirac deltas via callbacks), the adjoint λ(t) satisfies, in forward time,
@@ -633,7 +633,7 @@ DAEAdjointProblem(sol, sensealg::InterpolatingAdjoint, alg, t = nothing,
 
 Constructs the adjoint problem for a fully implicit `DAEProblem` solution `sol`
 (`F(du, u, p, t) = 0`), using the augmented adjoint DAE formulation of Cao, Li,
-Petzold & Serban (SIAM J. Sci. Comput. 24(3), 2003). The augmented adjoint state is
+Petzold & Serban (SIAM Journal on Scientific Computing 24(3), 2003). The augmented adjoint state is
 `z = [w; λ; grad]` with `w = (∂F/∂(du))' λ`, and the returned problem is a
 singular-mass-matrix `ODEProblem` to be solved backwards in time with a
 mass-matrix-capable stiff solver (e.g. `FBDF`, `Rodas5P`).
