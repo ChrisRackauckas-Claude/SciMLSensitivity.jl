@@ -779,10 +779,13 @@ SundialsAdjoint(; chunk_size = 0, autodiff = true,
 
 ## SciMLProblem Support
 
-This `sensealg` only supports `ODEProblem`s without callbacks (events) and only
-supports discrete cost functionals (which is what reverse-mode AD of `solve`
-uses). The state and time types must be `Float64` (a SUNDIALS requirement), and
-mass matrices are not supported.
+This `sensealg` only supports in-place `ODEProblem`s without callbacks (events).
+Discrete cost functionals (`t` with `dgdu_discrete`, which is what reverse-mode
+AD of `solve` uses) and continuous cost functionals (`dgdu_continuous`/
+`dgdp_continuous` or a scalar `g(u, p, t)`) are supported, including both at
+once; the continuous contributions are integrated by CVODES itself as part of
+the backward pass. The state and time types must be `Float64` (a SUNDIALS
+requirement), and mass matrices are not supported.
 
 ## References
 

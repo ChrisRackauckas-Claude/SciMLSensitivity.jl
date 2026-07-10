@@ -1,9 +1,10 @@
 module SciMLSensitivitySundialsExt
 
-using SciMLSensitivity: SciMLSensitivity, SciMLBase,
+using SciMLSensitivity: SciMLSensitivity, SciMLBase, SciMLLogging,
     SundialsAdjoint, QuadratureAdjoint, GaussAdjoint,
     ODEQuadratureAdjointSensitivityFunction, GaussIntegrand,
-    vecjacobian!, vec_pjac!, ReverseDiffVJP, mutable_zeros,
+    vecjacobian!, vec_pjac!, accumulate_cost!, inplace_vjp,
+    ReverseDiffVJP, mutable_zeros,
     canonicalize, Tunable, isscimlstructure, unwrapped_f
 import SciMLSensitivity: _adjoint_sensitivities
 using SciMLBase: ODEProblem, isinplace
@@ -24,7 +25,7 @@ end
 # `S` carries the state vjp machinery (`vecjacobian!`) and `integrand` the
 # parameter vjp machinery (`vec_pjac!`); both are the standard SciMLSensitivity
 # caches so all `autojacvec` choices work unchanged.
-mutable struct CVODESAdjointUserData{ND, F, P, S, GI, DL, PQ}
+mutable struct CVODESAdjointUserData{ND, F, P, S, GI, DL, PQ, GQ}
     const f::F
     const p::P
     const sz::NTuple{ND, Int}
@@ -33,6 +34,8 @@ mutable struct CVODESAdjointUserData{ND, F, P, S, GI, DL, PQ}
     const integrand::GI
     const dλ::DL
     const pquad::PQ
+    const continuous_cost::Bool
+    const gquad::GQ
 end
 
 function _cvodes_forward_rhs(
@@ -62,11 +65,12 @@ function _cvodes_adjoint_rhs(
     )
     vecjacobian!(data.dλ, y, λ, data.p, t, data.S)
     @. out = -data.dλ
+    data.continuous_cost && accumulate_cost!(out, y, data.p, t, data.S)
     return Sundials.CV_SUCCESS
 end
 
-# qB' = -(df/dp)^T yB. CVODES integrates qB backward from tf with qB(tf) = 0,
-# so the value returned at t0 is +∫_{t0}^{tf} λ^T (df/dp) dt.
+# qB' = -((df/dp)^T yB + dg/dp). CVODES integrates qB backward from tf with
+# qB(tf) = 0, so the value returned at t0 is +∫_{t0}^{tf} (λ^T df/dp + dg/dp) dt.
 function _cvodes_quad_rhs(
         t::realtype, y_nv::N_Vector, yB_nv::N_Vector,
         qBdot_nv::N_Vector, data::CVODESAdjointUserData{ND}
@@ -80,6 +84,13 @@ function _cvodes_quad_rhs(
     vec_pjac!(data.pquad, λ, y, t, data.integrand)
     pq = vec(data.pquad)
     @. out = -pq
+    if data.continuous_cost
+        # `accumulate_cost!` writes `-dg/dp` into `gquad` (the dλ contribution
+        # goes into the scratch `dλ` buffer and is discarded).
+        fill!(data.gquad, false)
+        accumulate_cost!(data.dλ, y, data.p, t, data.S, data.gquad)
+        out .+= data.gquad
+    end
     return Sundials.CV_SUCCESS
 end
 
@@ -150,18 +161,31 @@ function _adjoint_sensitivities(
         g = nothing, no_start = false,
         abstol = 1.0e-6, reltol = 1.0e-3,
         maxiters = Int(1.0e5),
+        verbose = SciMLLogging.Standard(),
         kwargs...
     ) where {CS, AD, FDT}
-    if dgdu_continuous !== nothing || dgdp_continuous !== nothing || g !== nothing
+    continuous_cost = dgdu_continuous !== nothing || dgdp_continuous !== nothing ||
+        g !== nothing
+    if continuous_cost && dgdu_continuous === nothing && g === nothing
+        error("SundialsAdjoint requires `dgdu_continuous` or `g` alongside `dgdp_continuous`.")
+    end
+    if g !== nothing && t !== nothing
         error(
-            "SundialsAdjoint currently only supports discrete cost functionals " *
-                "(`t` together with `dgdu_discrete`/`dgdp_discrete`). Continuous cost " *
-                "functionals (`g`, `dgdu_continuous`, `dgdp_continuous`) are not " *
-                "supported; use `GaussAdjoint` or `QuadratureAdjoint` for those."
+            "SundialsAdjoint does not support the discrete scalar cost form " *
+                "(`g` together with `t`). Provide the discrete cost derivative " *
+                "directly via `dgdu_discrete`."
         )
     end
-    (t === nothing || dgdu_discrete === nothing) &&
-        error("SundialsAdjoint requires `t` and `dgdu_discrete` to be specified.")
+    if t !== nothing && dgdu_discrete === nothing
+        error("SundialsAdjoint requires `dgdu_discrete` when `t` is specified.")
+    end
+    if t === nothing && !continuous_cost
+        error(
+            "SundialsAdjoint requires a cost functional: either `t` with " *
+                "`dgdu_discrete`, or a continuous cost via `dgdu_continuous`/" *
+                "`dgdp_continuous` or `g`."
+        )
+    end
 
     prob = sol.prob
     prob isa ODEProblem ||
@@ -177,18 +201,19 @@ function _adjoint_sensitivities(
     t0, tf = prob.tspan
     t0 < tf || error("SundialsAdjoint requires a forward time span with `tspan[1] < tspan[2]`.")
 
-    ts = collect(Float64, t)
+    ts = t === nothing ? Float64[] : collect(Float64, t)
     issorted(ts) || error("SundialsAdjoint requires the cost times `t` to be sorted in ascending order.")
-    (first(ts) >= t0 && last(ts) <= tf) ||
+    if !isempty(ts) && !(first(ts) >= t0 && last(ts) <= tf)
         error("SundialsAdjoint requires all cost times `t` to lie within the problem `tspan`.")
+    end
 
     p = prob.p
     has_p = !(p === nothing || p isa SciMLBase.NullParameters)
     if has_p
         if isscimlstructure(p) && !(p isa AbstractArray)
-            tunables, _, _ = canonicalize(Tunable(), p)
+            tunables, repack, _ = canonicalize(Tunable(), p)
         elseif p isa AbstractArray
-            tunables = p
+            tunables, repack = p, identity
         else
             error(
                 "SundialsAdjoint requires the parameters to be an `AbstractArray` or a " *
@@ -196,10 +221,16 @@ function _adjoint_sensitivities(
             )
         end
     else
-        tunables = nothing
+        tunables, repack = nothing, identity
     end
 
-    vjp = sensealg.autojacvec === nothing ? ReverseDiffVJP() : sensealg.autojacvec
+    # The standard automatic vjp choice; `adjoint_sensitivities` already applies
+    # this before dispatching here, so this only triggers on direct calls.
+    vjp = if sensealg.autojacvec === nothing
+        has_p ? inplace_vjp(prob, u0, p, verbose, repack) : ReverseDiffVJP()
+    else
+        sensealg.autojacvec
+    end
     vjp === true &&
         error(
         "SundialsAdjoint does not support `autojacvec = true`. Use `autojacvec = false` " *
@@ -208,15 +239,16 @@ function _adjoint_sensitivities(
     )
 
     # Reuse the existing quadrature/Gauss adjoint vjp caches: `S` computes the
-    # state vjp `(df/du)^T λ` via `vecjacobian!` and `integrand` the parameter
-    # vjp `(df/dp)^T λ` via `vec_pjac!`.
+    # state vjp `(df/du)^T λ` via `vecjacobian!` (plus the continuous-cost
+    # `dg/du` term via `accumulate_cost!`) and `integrand` the parameter vjp
+    # `(df/dp)^T λ` via `vec_pjac!`.
     S = ODEQuadratureAdjointSensitivityFunction(
-        nothing,
+        g,
         QuadratureAdjoint(
             chunk_size = CS, autodiff = AD, diff_type = FDT,
             autojacvec = vjp
         ),
-        true, sol, nothing, nothing, alg
+        !continuous_cost, sol, dgdu_continuous, dgdp_continuous, alg
     )
     integrand = has_p ?
         GaussIntegrand(
@@ -233,7 +265,8 @@ function _adjoint_sensitivities(
     f = unwrapped_f(prob.f)
     data = CVODESAdjointUserData(
         f, p, size(u0), n, S, integrand,
-        zeros(n), has_p ? mutable_zeros(tunables) : nothing
+        zeros(n), has_p ? mutable_zeros(tunables) : nothing,
+        continuous_cost, continuous_cost && has_p ? zeros(np) : nothing
     )
     fwd_cfun = _forward_cfunction(data)
     adj_cfun = _adjoint_cfunction(data)

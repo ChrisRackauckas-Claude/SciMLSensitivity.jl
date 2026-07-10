@@ -91,6 +91,66 @@ dgdu(out, u, p, t, i) = (out .= 1.0)
     end
 end
 
+@testset "continuous cost functionals" begin
+    sol = solve(prob, CVODE_BDF(), abstol = 1.0e-10, reltol = 1.0e-10)
+
+    # G = ∫ (p1 * (u1 + u2)) dt via an augmented quadrature state
+    function lotka_quad!(du, u, p, t)
+        lotka!(du, u, p, t)
+        du[3] = p[1] * (u[1] + u[2])
+        return nothing
+    end
+    function Gcont(θ)
+        _prob = ODEProblem(lotka_quad!, [θ[1], θ[2], 0.0], tspan, θ[3:end])
+        _sol = solve(
+            _prob, Vern9(), abstol = 1.0e-12, reltol = 1.0e-12,
+            save_everystep = false
+        )
+        return _sol.u[end][3]
+    end
+    refcont = ForwardDiff.gradient(Gcont, [u0; p])
+
+    dgdu_cont(out, u, p, t) = (out .= p[1])
+    dgdp_cont(out, u, p, t) = (out .= 0.0; out[1] = u[1] + u[2])
+    g_cont(u, p, t) = p[1] * (u[1] + u[2])
+
+    @testset "dgdu_continuous + dgdp_continuous" begin
+        du0, dp = adjoint_sensitivities(
+            sol, CVODE_BDF(); dgdu_continuous = dgdu_cont,
+            dgdp_continuous = dgdp_cont,
+            sensealg = SundialsAdjoint(),
+            abstol = 1.0e-10, reltol = 1.0e-10
+        )
+        @test du0 ≈ refcont[1:2] rtol = 1.0e-5
+        @test vec(dp) ≈ refcont[3:end] rtol = 1.0e-5
+    end
+
+    @testset "scalar g" begin
+        du0, dp = adjoint_sensitivities(
+            sol, CVODE_BDF(); g = g_cont,
+            sensealg = SundialsAdjoint(),
+            abstol = 1.0e-10, reltol = 1.0e-10
+        )
+        @test du0 ≈ refcont[1:2] rtol = 1.0e-5
+        @test vec(dp) ≈ refcont[3:end] rtol = 1.0e-5
+    end
+
+    @testset "mixed discrete + continuous" begin
+        sol_saved = solve(
+            prob, CVODE_BDF(), abstol = 1.0e-10, reltol = 1.0e-10, saveat = ts
+        )
+        du0, dp = adjoint_sensitivities(
+            sol_saved, CVODE_BDF(); t = ts, dgdu_discrete = dgdu,
+            dgdu_continuous = dgdu_cont, dgdp_continuous = dgdp_cont,
+            sensealg = SundialsAdjoint(),
+            abstol = 1.0e-10, reltol = 1.0e-10
+        )
+        refmix = refgrad .+ refcont
+        @test du0 ≈ refmix[1:2] rtol = 1.0e-5
+        @test vec(dp) ≈ refmix[3:end] rtol = 1.0e-5
+    end
+end
+
 @testset "reverse-mode AD of solve" begin
     function loss(p)
         _sol = solve(
