@@ -573,8 +573,33 @@ end
 # Dispatched on inside extension.
 struct MooncakeLoaded end
 struct ReactantLoaded end
+"""
+    ReactantDualTag
+
+Tag type used by the Reactant extension to distinguish dual-number compilation
+paths from floating-point compilation paths.
+
+This is developer API for `SciMLSensitivityReactantExt` and related extension
+code.
+"""
 struct ReactantDualTag end
 
+"""
+    ReactantVJPConfig
+
+Compiled-kernel cache used by `ReactantVJP`.
+
+## Fields
+
+  - `float_kernel`, `dual_kernel`: Reactant-compiled kernels for ordinary and
+    dual-number execution.
+  - `float_caches`, `dual_caches`: buffers reused by the corresponding kernels.
+  - `is_nullparams`: whether the differentiated problem has null parameters.
+  - `chunk_size`: ForwardDiff chunk size used when dual execution is required.
+
+This is developer API for the Reactant extension; users normally configure it
+through `ReactantVJP`.
+"""
 struct ReactantVJPConfig{FK, DK, FC, DC}
     float_kernel::FK
     dual_kernel::DK

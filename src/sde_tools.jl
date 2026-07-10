@@ -1,4 +1,25 @@
 # for Ito / Stratonovich conversion
+"""
+    StochasticTransformedFunction(sol, f, g, corfunc_analytical=nothing)
+
+Drift-function wrapper used when constructing stochastic adjoint problems.
+
+For Ito SDEs, the wrapper subtracts the noise-induced correction from the drift
+so continuous adjoint equations can be formed in the required interpretation.
+For Stratonovich problems this transformation is not needed.
+
+## Arguments
+
+  - `sol`: forward stochastic solution.
+  - `f`: drift function.
+  - `g`: diffusion function.
+  - `corfunc_analytical`: optional analytical correction function.
+
+## Returns
+
+A callable `StochasticTransformedFunction` with both in-place and out-of-place
+methods matching the original drift function style.
+"""
 struct StochasticTransformedFunction{
         pType, fType <: AbstractDiffEqFunction,
         gType, noiseType, cfType,

@@ -71,6 +71,31 @@ function NILSSSensitivityFunction(
     )
 end
 
+"""
+    NILSSProblem(prob, sensealg::NILSS; kwargs...)
+
+Problem wrapper for non-intrusive least-squares shadowing forward
+sensitivities.
+
+## Arguments
+
+  - `prob`: ODE problem defining the chaotic trajectory.
+  - `sensealg`: `NILSS` algorithm choice.
+
+## Keyword Arguments
+
+  - `t`: discrete saved-time grid. When supplied, it must align with the NILSS
+    segment save spacing.
+  - `dgdu_discrete`, `dgdp_discrete`: derivatives of a discrete objective.
+  - `dgdu_continuous`, `dgdp_continuous`: derivatives of a continuous objective.
+  - `g`: scalar observable; required by `NILSS`.
+
+## Returns
+
+A `NILSSProblem` containing the segmented forward sensitivity problem,
+orthonormalization buffers, quadrature weights, and work arrays consumed by
+`shadow_forward`.
+"""
 struct NILSSProblem{
         A, CacheType, FSprob, probType, u0Type, vstar0Type, w0Type,
         TType, dtType, gType, yType, vstarType,

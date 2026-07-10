@@ -204,6 +204,7 @@ ForwardSensitivity
 ForwardDiffSensitivity
 BacksolveAdjoint
 GaussAdjoint
+GaussKronrodAdjoint
 InterpolatingAdjoint
 QuadratureAdjoint
 ReverseDiffAdjoint
@@ -211,10 +212,12 @@ TrackerAdjoint
 ZygoteAdjoint
 EnzymeAdjoint
 MooncakeAdjoint
+ForwardDiffOverAdjoint
 ForwardLSS
 AdjointLSS
 NILSS
 NILSAS
+SensitivityAlg
 ```
 
 ## Vector-Jacobian Product (VJP) Choices
@@ -225,6 +228,21 @@ EnzymeVJP
 TrackerVJP
 ReverseDiffVJP
 SciMLSensitivity.MooncakeVJP
+ReactantVJP
+ReactantVJPConfig
+ReactantDualTag
+supports_functor_params
+```
+
+## Shadowing Problem Interfaces
+
+```@docs
+ForwardLSSProblem
+AdjointLSSProblem
+NILSSProblem
+NILSASProblem
+shadow_forward
+shadow_adjoint
 ```
 
 ## More Details on Sensitivity Algorithm Choices

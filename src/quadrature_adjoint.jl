@@ -213,6 +213,25 @@ end
     end
 end
 
+"""
+    AdjointSensitivityIntegrand(sol, adj_sol, sensealg, dgdp=nothing)
+
+Callable quadrature integrand for parameter-gradient accumulation in
+`QuadratureAdjoint` and related continuous adjoint paths.
+
+## Arguments
+
+  - `sol`: forward solution.
+  - `adj_sol`: reverse adjoint solution.
+  - `sensealg`: quadrature-style adjoint algorithm.
+  - `dgdp`: optional continuous cost derivative with respect to parameters.
+
+## Returns
+
+A callable object. Calling `integrand(out, t)` writes the row vector
+``lambda(t)' * df/ dp + dg / dp`` into `out`, and calling `integrand(t)`
+allocates and returns that value.
+"""
 struct AdjointSensitivityIntegrand{
         pType, uType, lType, rateType, S, AS, PF, PJC, PJT, DGP,
         G, tType, rType, UF,

@@ -115,6 +115,30 @@ function LSSSensitivityFunction(
     )
 end
 
+"""
+    ForwardLSSProblem(sol, sensealg::ForwardLSS; kwargs...)
+
+Problem wrapper for forward least-squares shadowing sensitivities of chaotic
+ODE trajectories.
+
+## Arguments
+
+  - `sol`: reference solution whose saved time points define the shadowing
+    discretization.
+  - `sensealg`: `ForwardLSS` algorithm choice.
+
+## Keyword Arguments
+
+  - `t`: saved times for discrete cost derivatives.
+  - `dgdu_discrete`, `dgdp_discrete`: derivatives of a discrete cost.
+  - `dgdu_continuous`, `dgdp_continuous`: derivatives of a continuous cost.
+  - `g`: scalar observable used by time-dilation regularization.
+
+## Returns
+
+A `ForwardLSSProblem` containing the discretized reference trajectory, Schur
+factorization, work arrays, and derivative caches consumed by `shadow_forward`.
+"""
 struct ForwardLSSProblem{
         A, C, solType, dtType, umidType, dudtType, SType, Ftype, bType,
         ηType, wType, vType, windowType,
@@ -358,6 +382,17 @@ function b!(b, prob::ForwardLSSProblem)
     return nothing
 end
 
+"""
+    shadow_forward(prob::ForwardLSSProblem; sensealg=prob.sensealg)
+    shadow_forward(prob::NILSSProblem, alg; sensealg=prob.sensealg)
+
+Compute forward shadowing sensitivities.
+
+For `ForwardLSSProblem`, this solves the least-squares shadowing linear system
+on the already discretized trajectory and returns the parameter derivative of
+the averaged objective. For `NILSSProblem`, `alg` is the ODE solver used on each
+segment of the NILSS forward sensitivity problem.
+"""
 function shadow_forward(prob::ForwardLSSProblem; sensealg = prob.sensealg)
     return shadow_forward(prob, sensealg, sensealg.LSSregularizer)
 end
@@ -514,6 +549,16 @@ function lss_accumulate_cost!(u, p, t, sensealg::ForwardLSS, diffcache, idx)
 
     return nothing
 end
+"""
+    AdjointLSSProblem(sol, sensealg::AdjointLSS; kwargs...)
+
+Problem wrapper for adjoint least-squares shadowing sensitivities of chaotic ODE
+trajectories.
+
+The arguments and cost-derivative keywords match `ForwardLSSProblem`. The
+constructed problem stores the adjoint LSS Schur factorization and work arrays
+used by `shadow_adjoint`.
+"""
 struct AdjointLSSProblem{
         A, C, solType, dtType, umidType, dudtType, SType, FType, hType,
         bType, wType,
@@ -668,6 +713,17 @@ function wBcorrect!(S, sol, g, Nt, sense, sensealg)
     return nothing
 end
 
+"""
+    shadow_adjoint(prob::AdjointLSSProblem; sensealg=prob.sensealg)
+    shadow_adjoint(prob::NILSASProblem, alg; sensealg=prob.sensealg, kwargs...)
+
+Compute adjoint shadowing sensitivities.
+
+For `AdjointLSSProblem`, this solves the adjoint least-squares shadowing system
+and returns derivatives of the averaged objective with respect to parameters.
+For `NILSASProblem`, `alg` is the differential-equation solver used on each
+reverse segment.
+"""
 function shadow_adjoint(prob::AdjointLSSProblem; sensealg = prob.sensealg)
     return shadow_adjoint(prob, sensealg, sensealg.LSSregularizer)
 end
