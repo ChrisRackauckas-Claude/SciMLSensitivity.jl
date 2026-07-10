@@ -207,6 +207,7 @@ GaussAdjoint
 GaussKronrodAdjoint
 InterpolatingAdjoint
 QuadratureAdjoint
+SundialsAdjoint
 ReverseDiffAdjoint
 TrackerAdjoint
 ZygoteAdjoint

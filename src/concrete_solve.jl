@@ -533,6 +533,7 @@ function SciMLBase._concrete_solve_adjoint(
             InterpolatingAdjoint,
             GaussAdjoint,
             GaussKronrodAdjoint,
+            SundialsAdjoint,
         },
         u0, p, originator::SciMLBase.ADOriginator,
         args...; save_start = true, save_end = true,

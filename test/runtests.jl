@@ -39,6 +39,7 @@ run_tests(;
                 @time @safetestset "Autodiff Events" include("Core2/autodiff_events.jl")
                 @time @safetestset "Enzyme VJP Inactive" include("Core2/enzyme_vjp_inactive.jl")
                 @time @safetestset "Enzyme VJP View ComponentArray" include("Core2/enzyme_view_componentarray.jl")
+                @time @safetestset "Sundials CVODES Adjoint" include("Core2/sundials_adjoint.jl")
             end
         end,
         "Core3" => function ()
