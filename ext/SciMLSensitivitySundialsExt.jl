@@ -885,6 +885,16 @@ function _adjoint_sensitivities(
     ncheck = Ref{Cint}(0)
     which = Ref{Cint}(0)
 
+    # The forward/backward linear solvers and matrices are raw SUNDIALS pointers
+    # that IDAS uses for the whole integration; they carry no finalizer, so they
+    # must stay bound (pre-declared here, assigned inside the `try`) and be freed
+    # explicitly in the `finally` after `IDAFree` (via `empty!(mem)`) and before
+    # `SUNContext_Free`, otherwise they leak. `:GMRES` returns a `nothing` matrix.
+    local LSf = nothing
+    local Af = nothing
+    local LSB = nothing
+    local AB = nothing
+
     GC.@preserve data ufwd_nv dufwd_nv yret_nv ypret_nv yinterp_nv ypinterp_nv λ_nv λp_nv qB_nv id_nv begin
         try
             # Forward pass with checkpointing. The provided `(u0, du0)` are
@@ -1099,6 +1109,10 @@ function _adjoint_sensitivities(
             has_p && (dp .+= qB)
         finally
             empty!(mem)
+            LSf === nothing || Sundials.SUNLinSolFree(LSf)
+            LSB === nothing || Sundials.SUNLinSolFree(LSB)
+            Af === nothing || Sundials.SUNMatDestroy(Af)
+            AB === nothing || Sundials.SUNMatDestroy(AB)
             Sundials.SUNContext_Free(ctx)
         end
     end
