@@ -23,4 +23,12 @@ jobs:
     with:
       julia-version: "${{ matrix.julia-version }}"
       group: "${{ matrix.group }}"
+      # Sundials (a weakdep behind SciMLSensitivitySundialsExt) cannot be
+      # --min-resolved by Resolver.jl in the merged floor-resolve: promoting it
+      # to a hard dep throws `KeyError: key UUID(c3572dad-…) not found`
+      # (Resolve.jl:118), the same class of failure as Mooncake. Keep it a
+      # weakdep during downgrade resolution (Mooncake is the reusable
+      # workflow's default; overriding no_promote replaces that default, so it
+      # must be re-listed here).
+      no_promote: "Mooncake,Sundials"
     secrets: "inherit"
