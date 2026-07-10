@@ -201,3 +201,30 @@ end
         sensealg = SundialsAdjoint(autojacvec = true)
     )
 end
+
+@testset "GaussAdjoint with CVODE_BDF" begin
+    # A `saveat` (non-dense) forward solution auto-enables Gauss checkpointing,
+    # whose dense checkpoint re-solves carry a different interpolation type
+    # (Hermite) than the original Sundials solution (linear).
+    sol_saveat = solve(
+        prob, CVODE_BDF(), abstol = 1.0e-10, reltol = 1.0e-10, saveat = ts
+    )
+    du0, dp = adjoint_sensitivities(
+        sol_saveat, CVODE_BDF(); t = ts, dgdu_discrete = dgdu,
+        sensealg = GaussAdjoint(autojacvec = ReverseDiffVJP()),
+        abstol = 1.0e-8, reltol = 1.0e-8
+    )
+    @test du0 ≈ refgrad[1:2] rtol = 1.0e-5
+    @test vec(dp) ≈ refgrad[3:end] rtol = 1.0e-5
+
+    sol_dense = solve(
+        prob, CVODE_BDF(), abstol = 1.0e-10, reltol = 1.0e-10, dense = true
+    )
+    du0d, dpd = adjoint_sensitivities(
+        sol_dense, CVODE_BDF(); t = ts, dgdu_discrete = dgdu,
+        sensealg = GaussAdjoint(autojacvec = ReverseDiffVJP()),
+        abstol = 1.0e-8, reltol = 1.0e-8
+    )
+    @test du0d ≈ refgrad[1:2] rtol = 1.0e-5
+    @test vec(dpd) ≈ refgrad[3:end] rtol = 1.0e-5
+end
