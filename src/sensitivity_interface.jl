@@ -107,6 +107,17 @@ which are then applied to the corresponding ``\lambda^\star`` and ``\frac{dG}{dp
 
 For more information, see [Sensitivity Math Details](@ref sensitivity_math).
 
+!!! note
+
+    Fully implicit DAEs (`DAEProblem`, `F(du, u, p, t) = 0`) are supported with
+    `sensealg = InterpolatingAdjoint()` (without checkpointing), including index-1
+    DAEs and Hessenberg index-2 DAEs. The adjoint is formulated with the augmented
+    adjoint DAE of Cao, Li, Petzold & Serban (2003); see [`DAEAdjointProblem`](@ref)
+    for the supported structure and requirements. If `alg` is a DAE solver
+    (e.g. `DFBDF`), the adjoint is solved in fully implicit form with it; if it is a
+    mass-matrix-capable ODE solver (e.g. `FBDF`, `Rodas5P`), the adjoint is solved
+    in mass-matrix form.
+
 ## Positional Arguments
 
 - `sol`: the solution from the forward pass of the ODE. Note that if not using a checkpointing
@@ -471,8 +482,18 @@ function _adjoint_sensitivities(
             abstol, reltol,
             corfunc_analytical
         )
+    elseif sol.prob isa SciMLBase.AbstractDAEProblem
+        adj_prob,
+            rcb = DAEAdjointProblem(
+            sol, sensealg, alg, t, dgdu_discrete,
+            dgdp_discrete,
+            dgdu_continuous, dgdp_continuous, g, Val(true);
+            checkpoints,
+            callback, no_start,
+            abstol, reltol, kwargs...
+        )
     else
-        error("Continuous adjoint sensitivities are only supported for ODE/SDE/RODE problems.")
+        error("Continuous adjoint sensitivities are only supported for ODE/SDE/RODE/DAE problems.")
     end
 
     # The reverse adjoint must step on the forward grid. Checkpointing already
@@ -497,6 +518,47 @@ function _adjoint_sensitivities(
     end
     prob = sol.prob
     l = mtkp === nothing || mtkp === SciMLBase.NullParameters() ? 0 : length(tunables)
+
+    if sol.prob isa SciMLBase.AbstractDAEProblem
+        # The augmented adjoint state is z = [w; λ; grad]: dG/du0 is w(t0) and the
+        # parameter gradient block sits behind both w and λ.
+        numstates = length(state_values(prob))
+        zend = state_values(adj_sol)[end]
+        du0 = zend[1:numstates]
+
+        if mtkp === nothing || mtkp === SciMLBase.NullParameters()
+            dp = nothing
+        elseif eltype(mtkp) <: real(eltype(zend))
+            dp = real.(zend[(1:l) .+ 2 * numstates])'
+        else
+            dp = zend[(1:l) .+ 2 * numstates]'
+        end
+
+        if rcb !== nothing && !isempty(rcb.Δλas) && dp !== nothing
+            S = adj_prob.f.f
+            S isa DAEAdjointResidual && (S = S.S)
+            (; structure) = rcb.diffcache
+            iλ = similar(rcb.λ, numstates)
+            out = zero(dp')
+            yy = similar(rcb.y)
+            dyy = similar(rcb.y)
+            vjp_du_scratch = similar(rcb.y)
+            vjp_u_scratch = similar(rcb.y)
+            for (Δλa, tt) in rcb.Δλas
+                iλ .= zero(eltype(iλ))
+                iλ[structure.algeeq_idxs] .= Δλa
+                sol(yy, tt)
+                sol(dyy, tt, Val{1})
+                dae_vecjacobian!(
+                    vjp_du_scratch, vjp_u_scratch, vec(out), dyy, yy, iλ,
+                    mtkp, tt, S
+                )
+                dp .+= out'
+            end
+        end
+        return du0, dp
+    end
+
     du0 = state_values(adj_sol)[end][1:length(state_values(prob))]
 
     if eltype(mtkp) <: real(eltype(state_values(adj_sol)[end]))

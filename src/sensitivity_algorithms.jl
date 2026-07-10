@@ -362,8 +362,10 @@ The total compute cost is no more than double the original forward compute cost.
 
 ## SciMLProblem Support
 
-This `sensealg` only supports `ODEProblem`s, `SDEProblem`s, and `RODEProblem`s. This `sensealg`
-supports callbacks (events).
+This `sensealg` supports `ODEProblem`s, `SDEProblem`s, `RODEProblem`s, and fully implicit
+`DAEProblem`s (index-1 and Hessenberg index-2, without checkpointing; see
+[`DAEAdjointProblem`](@ref)). This `sensealg` supports callbacks (events) for
+`ODEProblem`s, `SDEProblem`s, and `RODEProblem`s.
 
 ### Disclaimer for `SDEProblem`s
 
@@ -384,6 +386,10 @@ Rackauckas, C. and Ma, Y. and Dixit, V. and Guo, X. and Innes, M. and Revels, J.
 and Nyberg, J. and Ivaturi, V., A comparison of automatic differentiation and
 continuous sensitivity analysis for derivatives of differential equation solutions,
 arXiv:1812.01892
+
+Cao, Y. and Li, S. and Petzold, L. and Serban, R., Adjoint sensitivity analysis
+for differential-algebraic equations: The adjoint DAE system and its numerical
+solution, SIAM journal on scientific computing 24 pp: 1076-1089 (2003)
 """
 struct InterpolatingAdjoint{CS, AD, FDT, VJP} <:
     AbstractAdjointSensitivityAlgorithm{CS, AD, FDT}
