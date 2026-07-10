@@ -40,6 +40,7 @@ run_tests(;
                 @time @safetestset "Enzyme VJP Inactive" include("Core2/enzyme_vjp_inactive.jl")
                 @time @safetestset "Enzyme VJP View ComponentArray" include("Core2/enzyme_view_componentarray.jl")
                 @time @safetestset "Sundials CVODES Adjoint" include("Core2/sundials_adjoint.jl")
+                @time @safetestset "Sundials IDAS DAE Adjoint" include("Core2/sundials_idas_adjoint.jl")
             end
         end,
         "Core3" => function ()

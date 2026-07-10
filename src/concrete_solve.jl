@@ -37,6 +37,10 @@ function _enzyme_vjp_probe(f, repack, out, u, _p, t)
 end
 
 function inplace_vjp(prob, u0, p, verbose, repack)
+    # The probes below call `f(du, u, p, t)` and thus cannot handle DAE
+    # residuals `f(res, du, u, p, t)`; the DAE residual vjp machinery
+    # (the SundialsAdjoint/IDA path) is ReverseDiff-tape based.
+    prob isa SciMLBase.AbstractDAEProblem && return ReverseDiffVJP()
     du = zero(u0)
     # Get verbosity for sensitivity VJP choice warnings
     _verbose = _get_sensitivity_vjp_verbose(verbose)
@@ -523,6 +527,7 @@ end
 function SciMLBase._concrete_solve_adjoint(
         prob::Union{
             SciMLBase.AbstractODEProblem,
+            SciMLBase.AbstractDAEProblem,
             SciMLBase.AbstractSDEProblem,
             SciMLBase.AbstractRODEProblem,
         },
@@ -542,6 +547,23 @@ function SciMLBase._concrete_solve_adjoint(
         initializealg_default = SciMLBase.OverrideInit(; abstol = 1.0e-6, reltol = 1.0e-3),
         kwargs...
     )
+    if prob isa SciMLBase.AbstractDAEProblem && !(sensealg isa SundialsAdjoint)
+        error(
+            "Continuous adjoint sensitivities for `DAEProblem`s are only supported " *
+                "via `SundialsAdjoint` with the `IDA()` solver (requires `using Sundials`). " *
+                "For other solvers, use a discrete-sensitivity method such as " *
+                "`ForwardDiffSensitivity` or `ReverseDiffAdjoint`."
+        )
+    end
+    # `SciMLBase.sensitivity_solution` has no `DAESolution` method, so build the
+    # subset solution directly for DAEs.
+    _sensitivity_solution(sol, u, ts) =
+        sol isa SciMLBase.AbstractDAESolution ?
+        SciMLBase.build_solution(
+            sol.prob, sol.alg, ts isa Vector ? ts : collect(ts), u;
+            retcode = sol.retcode, stats = sol.stats
+        ) :
+        SciMLBase.sensitivity_solution(sol, u, ts)
     if !supports_functor_params(sensealg) &&
             !(p isa Union{Nothing, SciMLBase.NullParameters, AbstractArray}) &&
             !isscimlstructure(p) ||
@@ -715,7 +737,7 @@ function SciMLBase._concrete_solve_adjoint(
         # Saving behavior unchanged
         ts = current_time(sol)
         only_end = length(ts) == 1 && ts[1] == _prob.tspan[2]
-        out = SciMLBase.sensitivity_solution(sol, state_values(sol), ts)
+        out = _sensitivity_solution(sol, state_values(sol), ts)
     elseif saveat isa Number
         if _prob.tspan[2] > _prob.tspan[1]
             ts = _prob.tspan[1]:convert(typeof(_prob.tspan[2]), abs(saveat)):_prob.tspan[2]
@@ -732,10 +754,10 @@ function SciMLBase._concrete_solve_adjoint(
         end
 
         out = if save_idxs === nothing
-            out = SciMLBase.sensitivity_solution(sol, state_values(_out), ts)
+            out = _sensitivity_solution(sol, state_values(_out), ts)
         else
             _outf = getu(_out, save_idxs)
-            out = SciMLBase.sensitivity_solution(sol, _outf(_out), ts)
+            out = _sensitivity_solution(sol, _outf(_out), ts)
         end
         only_end = length(ts) == 1 && ts[1] == _prob.tspan[2]
     elseif isempty(saveat)
@@ -748,7 +770,7 @@ function SciMLBase._concrete_solve_adjoint(
         _u = sol.u[sol_idxs]
         u = save_idxs === nothing ? _u : [x[save_idxs] for x in _u]
         ts = current_time(sol, sol_idxs)
-        out = SciMLBase.sensitivity_solution(sol, u, ts)
+        out = _sensitivity_solution(sol, u, ts)
     else
         _saveat = saveat isa Array ? sort(saveat) : saveat # for minibatching
         if cb === nothing
@@ -762,10 +784,10 @@ function SciMLBase._concrete_solve_adjoint(
         end
 
         out = if save_idxs === nothing
-            out = SciMLBase.sensitivity_solution(sol, state_values(_out), ts)
+            out = _sensitivity_solution(sol, state_values(_out), ts)
         else
             _outf = getu(_out, save_idxs)
-            out = SciMLBase.sensitivity_solution(sol, _outf(_out), ts)
+            out = _sensitivity_solution(sol, _outf(_out), ts)
         end
         only_end = length(ts) == 1 && ts[1] == _prob.tspan[2]
     end

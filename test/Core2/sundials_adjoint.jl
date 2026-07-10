@@ -187,7 +187,7 @@ end
         e
     end
     @test err isa ErrorException
-    @test occursin("CVODES-compatible solver", err.msg)
+    @test occursin("CVODES/IDAS", err.msg)
     @test occursin("CVODE_BDF", err.msg)
 
     sol = solve(prob, CVODE_BDF(), abstol = 1.0e-10, reltol = 1.0e-10, saveat = ts)
