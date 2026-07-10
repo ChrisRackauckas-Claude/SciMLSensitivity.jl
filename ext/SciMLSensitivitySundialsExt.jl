@@ -298,6 +298,18 @@ function _adjoint_sensitivities(
     ncheck = Ref{Cint}(0)
     which = Ref{Cint}(0)
 
+    # The solver objects created inside the `try` must stay referenced until the
+    # `finally` cleanup: `NonLinSolHandle` carries a finalizer that frees the
+    # SUNDIALS nonlinear solver, so letting the binding go dead mid-integration
+    # lets GC free memory CVODES is still using (segfault); the linear solver and
+    # matrix have no finalizers and would leak without the explicit frees.
+    local nlsf = nothing
+    local LSf = nothing
+    local Af = nothing
+    local nlsB = nothing
+    local LSB = nothing
+    local AB = nothing
+
     GC.@preserve data ufwd_nv yret_nv λ_nv qB_nv begin
         try
             # Forward pass with checkpointing.
@@ -477,6 +489,12 @@ function _adjoint_sensitivities(
             has_p && (dp .+= qB)
         finally
             empty!(mem)
+            nlsf === nothing || empty!(nlsf)
+            nlsB === nothing || empty!(nlsB)
+            LSf === nothing || Sundials.SUNLinSolFree(LSf)
+            LSB === nothing || Sundials.SUNLinSolFree(LSB)
+            Af === nothing || Sundials.SUNMatDestroy(Af)
+            AB === nothing || Sundials.SUNMatDestroy(AB)
             Sundials.SUNContext_Free(ctx)
         end
     end
