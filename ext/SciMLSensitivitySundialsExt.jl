@@ -381,7 +381,10 @@ function _adjoint_sensitivities(
                     "CVodeQuadSStolerancesB"
                 )
                 _check_cvodes_flag(
-                    Sundials.CVodeSetQuadErrConB(mem, which[], 1),
+                    Sundials.CVodeSetQuadErrConB(
+                        mem, which[],
+                        sensealg.quad_error_control ? 1 : 0
+                    ),
                     "CVodeSetQuadErrConB"
                 )
             end

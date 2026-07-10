@@ -776,6 +776,11 @@ SundialsAdjoint(; chunk_size = 0, autodiff = true,
   - `interp`: the CVODES checkpoint interpolation scheme, either `:hermite`
     (cubic Hermite, `CV_HERMITE`) or `:polynomial` (variable-degree polynomial,
     `CV_POLYNOMIAL`). Defaults to `:hermite`.
+  - `quad_error_control`: whether the backward quadrature (the parameter
+    gradient) is included in the CVODES step error control
+    (`CVodeSetQuadErrConB`). Defaults to `true`. Setting `false` matches the
+    SUNDIALS default and can speed up the backward pass at the cost of not
+    controlling the quadrature error.
 
 ## SciMLProblem Support
 
@@ -802,24 +807,26 @@ struct SundialsAdjoint{CS, AD, FDT, VJP} <:
     autojacvec::VJP
     steps::Int
     interp::Symbol
+    quad_error_control::Bool
 end
 Base.@pure function SundialsAdjoint(;
         chunk_size = 0, autodiff = true,
         diff_type = Val{:central},
         autojacvec = nothing,
         steps = 150,
-        interp = :hermite
+        interp = :hermite,
+        quad_error_control = true
     )
     interp in (:hermite, :polynomial) ||
         error("SundialsAdjoint `interp` must be `:hermite` or `:polynomial`, got `$(interp)`.")
     SundialsAdjoint{chunk_size, autodiff, diff_type, typeof(autojacvec)}(
-        autojacvec, steps, interp
+        autojacvec, steps, interp, quad_error_control
     )
 end
 
 function setvjp(sensealg::SundialsAdjoint{CS, AD, FDT}, vjp) where {CS, AD, FDT}
     return SundialsAdjoint{CS, AD, FDT, typeof(vjp)}(
-        vjp, sensealg.steps, sensealg.interp
+        vjp, sensealg.steps, sensealg.interp, sensealg.quad_error_control
     )
 end
 
