@@ -91,6 +91,27 @@ dgdu(out, u, p, t, i) = (out .= 1.0)
     end
 end
 
+@testset "solver objects survive GC during integration" begin
+    # The FixedPoint nonlinear solver handle used for `method = :Functional`
+    # must stay rooted for the whole CVodeF/CVodeB integration; GC pressure in
+    # the RHS segfaulted when it was collectable (its finalizer frees the
+    # SUNDIALS object). GC in every RHS call makes that deterministic.
+    function lotka_gc!(du, u, p, t)
+        GC.gc(false)
+        lotka!(du, u, p, t)
+        return nothing
+    end
+    prob_gc = ODEProblem(lotka_gc!, u0, tspan, p)
+    sol_gc = solve(prob_gc, CVODE_Adams(), abstol = 1.0e-8, reltol = 1.0e-8, saveat = ts)
+    du0, dp = adjoint_sensitivities(
+        sol_gc, CVODE_Adams(); t = ts, dgdu_discrete = dgdu,
+        sensealg = SundialsAdjoint(autojacvec = ReverseDiffVJP()),
+        abstol = 1.0e-8, reltol = 1.0e-8
+    )
+    @test du0 ≈ refgrad[1:2] rtol = 1.0e-4
+    @test vec(dp) ≈ refgrad[3:end] rtol = 1.0e-4
+end
+
 @testset "continuous cost functionals" begin
     sol = solve(prob, CVODE_BDF(), abstol = 1.0e-10, reltol = 1.0e-10)
 
