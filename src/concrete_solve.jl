@@ -605,23 +605,6 @@ function SciMLBase._concrete_solve_adjoint(
         initializealg_default = SciMLBase.OverrideInit(; abstol = 1.0e-6, reltol = 1.0e-3),
         kwargs...
     )
-    if prob isa SciMLBase.AbstractDAEProblem && !(sensealg isa SundialsAdjoint)
-        error(
-            "Continuous adjoint sensitivities for `DAEProblem`s are only supported " *
-                "via `SundialsAdjoint` with the `IDA()` solver (requires `using Sundials`). " *
-                "For other solvers, use a discrete-sensitivity method such as " *
-                "`ForwardDiffSensitivity` or `ReverseDiffAdjoint`."
-        )
-    end
-    # `SciMLBase.sensitivity_solution` has no `DAESolution` method, so build the
-    # subset solution directly for DAEs.
-    _sensitivity_solution(sol, u, ts) =
-        sol isa SciMLBase.AbstractDAESolution ?
-        SciMLBase.build_solution(
-            sol.prob, sol.alg, ts isa Vector ? ts : collect(ts), u;
-            retcode = sol.retcode, stats = sol.stats
-        ) :
-        SciMLBase.sensitivity_solution(sol, u, ts)
     if !supports_functor_params(sensealg) &&
             !(p isa Union{Nothing, SciMLBase.NullParameters, AbstractArray}) &&
             !isscimlstructure(p) ||

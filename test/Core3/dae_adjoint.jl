@@ -58,18 +58,36 @@ sumsq_dg(out, u, p, t, i) = (out .= u) # g_i = sum(u.^2)/2 at each data point
     end
     fd_u = ForwardDiff.gradient(Gu, u0[1:2])
 
-    # adjoint solved in mass-matrix form (ODE algorithm) and in fully implicit
-    # residual form (DAE algorithm)
-    for adjalg in (FBDF(), DFBDF())
-        du0g, dpg = adjoint_sensitivities(
-            sol, adjalg; t = ts, dgdu_discrete = sumsq_dg,
-            sensealg = InterpolatingAdjoint(autojacvec = ReverseDiffVJP()),
-            abstol = 1.0e-8, reltol = 1.0e-8
+    # every DAE-capable adjoint method, with the adjoint solved both in
+    # mass-matrix form (ODE algorithm) and in fully implicit residual form
+    # (DAE algorithm)
+    @testset "sensealg = $(nameof(typeof(sensealg(ReverseDiffVJP()))))" for sensealg in (
+            x -> InterpolatingAdjoint(autojacvec = x),
+            x -> QuadratureAdjoint(autojacvec = x),
+            x -> GaussAdjoint(autojacvec = x),
+            x -> GaussKronrodAdjoint(autojacvec = x),
         )
-        @test vec(dpg) ≈ fd_p rtol = 1.0e-4
-        @test du0g[1:2] ≈ fd_u rtol = 1.0e-4
-        @test abs(du0g[3]) < 1.0e-10
+
+        for adjalg in (FBDF(), DFBDF())
+            du0g, dpg = adjoint_sensitivities(
+                sol, adjalg; t = ts, dgdu_discrete = sumsq_dg,
+                sensealg = sensealg(ReverseDiffVJP()),
+                abstol = 1.0e-8, reltol = 1.0e-8
+            )
+            @test vec(dpg) ≈ fd_p rtol = 1.0e-4
+            @test du0g[1:2] ≈ fd_u rtol = 1.0e-4
+            @test abs(du0g[3]) < 1.0e-10
+        end
     end
+
+    # EnzymeVJP through the interpolating adjoint
+    du0e, dpe = adjoint_sensitivities(
+        sol, FBDF(); t = ts, dgdu_discrete = sumsq_dg,
+        sensealg = InterpolatingAdjoint(autojacvec = EnzymeVJP()),
+        abstol = 1.0e-8, reltol = 1.0e-8
+    )
+    @test vec(dpe) ≈ fd_p rtol = 1.0e-4
+    @test du0e[1:2] ≈ fd_u rtol = 1.0e-4
 
     # default vjp choice
     du0d, dpd = adjoint_sensitivities(
@@ -117,12 +135,6 @@ end
     sol = solve(prob, DFBDF(), abstol = 1.0e-10, reltol = 1.0e-10)
     ts = collect(0.0:2.0:10.0)
 
-    du0g, dpg = adjoint_sensitivities(
-        sol, FBDF(); t = ts, dgdu_discrete = sumsq_dg,
-        sensealg = InterpolatingAdjoint(autojacvec = ReverseDiffVJP()),
-        abstol = 1.0e-8, reltol = 1.0e-8
-    )
-
     function G2(p)
         u0_ = [one(eltype(p)), zero(eltype(p)), p[4] - 1]
         du0_ = [
@@ -136,7 +148,26 @@ end
         sum(sum(abs2, u) / 2 for u in _sol.u)
     end
     fd_p = ForwardDiff.gradient(G2, p)
-    @test vec(dpg) ≈ fd_p rtol = 1.0e-4
+
+    # the Δλa' ∂F_alg/∂p jump correction flows through a different mechanism in
+    # each method (state augmentation vs quadrature vs integrating callback)
+    for _sensealg in (
+            InterpolatingAdjoint(autojacvec = ReverseDiffVJP()),
+            QuadratureAdjoint(autojacvec = ReverseDiffVJP()),
+            GaussAdjoint(autojacvec = ReverseDiffVJP()),
+            GaussKronrodAdjoint(autojacvec = ReverseDiffVJP()),
+        )
+        # 1e-10 adjoint tolerances: the quadrature methods integrate over the
+        # interpolated algebraic λ block of the adjoint solution, whose
+        # interpolation error dominates at looser tolerances (converges as the
+        # adjoint tolerance tightens; verified 1.6e-4 → 5.4e-10 from 1e-8 → 1e-10).
+        du0g, dpg = adjoint_sensitivities(
+            sol, FBDF(); t = ts, dgdu_discrete = sumsq_dg,
+            sensealg = _sensealg,
+            abstol = 1.0e-10, reltol = 1.0e-10
+        )
+        @test vec(dpg) ≈ fd_p rtol = 1.0e-4
+    end
 end
 
 @testset "Index-0: implicit-form ODE vs ODE adjoint" begin
@@ -239,11 +270,6 @@ end
 
     ts = collect(0.2:0.2:1.0)
     dg2(out, u, p, t, i) = (out .= [u[1], u[2], 0.0])
-    du0g, dpg = adjoint_sensitivities(
-        sol, FBDF(); t = ts, dgdu_discrete = dg2,
-        sensealg = InterpolatingAdjoint(autojacvec = ReverseDiffVJP()),
-        abstol = 1.0e-8, reltol = 1.0e-8
-    )
 
     y1e(t) = sin(p[3] * t)
     y2e(t) = y20 + p[2] * (cos(p[3] * t) - 1) / p[3]
@@ -252,11 +278,30 @@ end
     dy2_dp3(ti) = p[2] * (-ti * sin(p[3] * ti) * p[3] - (cos(p[3] * ti) - 1)) / p[3]^2
     dG_dp3 = sum(y1e(ti) * ti * cos(p[3] * ti) + y2e(ti) * dy2_dp3(ti) for ti in ts)
 
+    du0g, dpg = adjoint_sensitivities(
+        sol, FBDF(); t = ts, dgdu_discrete = dg2,
+        sensealg = InterpolatingAdjoint(autojacvec = ReverseDiffVJP()),
+        abstol = 1.0e-8, reltol = 1.0e-8
+    )
     @test du0g[2] ≈ dG_dy20 rtol = 1.0e-3
     @test du0g[3] == 0
     @test abs(vec(dpg)[1]) < 1.0e-6
     @test vec(dpg)[2] ≈ dG_dp2 rtol = 1.0e-3
     @test vec(dpg)[3] ≈ dG_dp3 rtol = 1.0e-3
+
+    # The quadrature-style methods cannot capture the impulsive index-2 adjoint
+    # multiplier at the cost times (its contribution sits at the quadrature
+    # interval endpoints), so they reject index-2 DAEs.
+    @test_throws ErrorException adjoint_sensitivities(
+        sol, FBDF(); t = ts, dgdu_discrete = dg2,
+        sensealg = QuadratureAdjoint(autojacvec = ReverseDiffVJP()),
+        abstol = 1.0e-8, reltol = 1.0e-8
+    )
+    @test_throws ErrorException adjoint_sensitivities(
+        sol, FBDF(); t = ts, dgdu_discrete = dg2,
+        sensealg = GaussAdjoint(autojacvec = ReverseDiffVJP()),
+        abstol = 1.0e-8, reltol = 1.0e-8
+    )
 end
 
 @testset "informative errors" begin
@@ -273,7 +318,7 @@ end
     sol = solve(prob, DFBDF(), abstol = 1.0e-8, reltol = 1.0e-8)
     @test_throws ErrorException adjoint_sensitivities(
         sol, FBDF(); t = [0.5, 1.0], dgdu_discrete = sumsq_dg,
-        sensealg = QuadratureAdjoint(autojacvec = ReverseDiffVJP())
+        sensealg = BacksolveAdjoint(autojacvec = ReverseDiffVJP())
     )
     @test_throws ErrorException adjoint_sensitivities(
         sol, FBDF(); t = [0.5, 1.0], dgdu_discrete = sumsq_dg,

@@ -73,6 +73,68 @@ function G(θ)
 end
 refgrad = ForwardDiff.gradient(G, [u0[1]; u0[2]; p])
 
+@testset "cost on algebraic variable (index-1 jump correction)" begin
+    # G = sum over ts of sum(u.^2)/2, touching the algebraic u3: the jumps take
+    # the index-1 constraint-transfer correction.
+    dgdu_all(out, u, p, t, i) = (out .= u)
+    function Gall(θ)
+        _u0 = [θ[1], θ[2], 1 - θ[1] - θ[2]]
+        _prob = ODEProblem(fmm, _u0, tspan, θ[3:5])
+        _sol = solve(_prob, Rodas5P(), abstol = 1.0e-12, reltol = 1.0e-12, saveat = ts)
+        return sum(sum(abs2, u) / 2 for u in _sol.u)
+    end
+    refall = ForwardDiff.gradient(Gall, [u0[1]; u0[2]; p])
+    du0g, dp = adjoint_sensitivities(
+        sol, IDA(); t = ts, dgdu_discrete = dgdu_all,
+        sensealg = SundialsAdjoint(autojacvec = ReverseDiffVJP()),
+        abstol = 1.0e-10, reltol = 1.0e-10
+    )
+    @test du0g[1:2] ≈ refall[1:2] rtol = 1.0e-4
+    @test du0g[3] == 0.0
+    @test vec(dp) ≈ refall[3:5] rtol = 1.0e-4
+end
+
+@testset "parameter-dependent algebraic constraint" begin
+    # Constraint u1 + u2 + u3 = s with s = p[4]: exercises the Δλa' ∂F_alg/∂p
+    # correction to the parameter gradient at the cost jumps.
+    function rober_s!(res, du, u, p, t)
+        y1, y2, y3 = u
+        k1, k2, k3, s = p
+        res[1] = du[1] + k1 * y1 - k3 * y2 * y3
+        res[2] = du[2] - k1 * y1 + k2 * y2^2 + k3 * y2 * y3
+        res[3] = y1 + y2 + y3 - s
+        return nothing
+    end
+    ps = [0.04, 3.0e7, 1.0e4, 1.0]
+    sprob = DAEProblem(
+        rober_s!, du0, u0, tspan, ps; differential_vars = [true, true, false]
+    )
+    ssol = solve(sprob, IDA(); abstol = 1.0e-10, reltol = 1.0e-10, saveat = ts)
+    dgdu_all(out, u, p, t, i) = (out .= u)
+    function rober_mms!(du, u, p, t)
+        y1, y2, y3 = u
+        k1, k2, k3, s = p
+        du[1] = -k1 * y1 + k3 * y2 * y3
+        du[2] = k1 * y1 - k2 * y2^2 - k3 * y2 * y3
+        du[3] = y1 + y2 + y3 - s
+        return nothing
+    end
+    fmms = ODEFunction(rober_mms!, mass_matrix = Diagonal([1.0, 1.0, 0.0]))
+    function Gs(θ)
+        _u0 = [one(eltype(θ)), zero(eltype(θ)), θ[4] - 1]
+        _prob = ODEProblem(fmms, _u0, tspan, θ)
+        _sol = solve(_prob, Rodas5P(), abstol = 1.0e-12, reltol = 1.0e-12, saveat = ts)
+        return sum(sum(abs2, u) / 2 for u in _sol.u)
+    end
+    refs = ForwardDiff.gradient(Gs, ps)
+    du0g, dp = adjoint_sensitivities(
+        ssol, IDA(); t = ts, dgdu_discrete = dgdu_all,
+        sensealg = SundialsAdjoint(autojacvec = ReverseDiffVJP()),
+        abstol = 1.0e-10, reltol = 1.0e-10
+    )
+    @test vec(dp) ≈ refs rtol = 1.0e-4
+end
+
 @testset "Robertson DAE vs ForwardDiff" begin
     @testset "vjp = $(vjp)" for vjp in (ReverseDiffVJP(), ReverseDiffVJP(true))
         du0g, dp = adjoint_sensitivities(
@@ -203,19 +265,38 @@ end
         sensealg = SundialsAdjoint(autojacvec = ReverseDiffVJP())
     )
 
-    # cost gradient touching an algebraic variable
-    dgdu_alg(out, u, p, t, i) = (out .= 0.0; out[3] = 1.0)
-    err = try
-        adjoint_sensitivities(
-            sol, IDA(); t = ts, dgdu_discrete = dgdu_alg,
-            sensealg = SundialsAdjoint(autojacvec = ReverseDiffVJP())
-        )
-        nothing
-    catch e
-        e
+    # Hessenberg index-2 DAEs are rejected on the IDAS route
+    function hess2!(res, du, u, p, t)
+        res[1] = p[1] * u[2] + u[3] - du[1]
+        res[2] = -p[2] * u[1] - du[2]
+        res[3] = u[1] - sin(p[3] * t)
+        return nothing
     end
-    @test err isa ErrorException
-    @test occursin("algebraic", err.msg)
+    i2prob = DAEProblem(
+        hess2!, [3.0, 0.0, 0.0], [0.0, 1.0, 2.0], (0.0, 1.0), [1.0, 2.0, 3.0];
+        differential_vars = [true, true, false]
+    )
+    # IDA itself may fail on the index-2 forward solve; the structural rejection
+    # only needs a solution object, however inaccurate.
+    i2sol = try
+        solve(i2prob, IDA(); abstol = 1.0e-8, reltol = 1.0e-8, saveat = [1.0], verbose = false)
+    catch
+        nothing
+    end
+    if i2sol !== nothing
+        err = try
+            adjoint_sensitivities(
+                i2sol, IDA(); t = [1.0],
+                dgdu_discrete = (out, u, p, t, i) -> (out .= [u[1], u[2], 0.0]),
+                sensealg = SundialsAdjoint(autojacvec = ReverseDiffVJP())
+            )
+            nothing
+        catch e
+            e
+        end
+        @test err isa ErrorException
+        @test occursin("index-2", err.msg)
+    end
 
     # state-dependent ∂F/∂du is caught by the runtime screen
     function nonlin_du!(res, du, u, p, t)

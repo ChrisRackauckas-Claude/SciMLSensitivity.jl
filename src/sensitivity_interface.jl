@@ -110,13 +110,15 @@ For more information, see [Sensitivity Math Details](@ref sensitivity_math).
 !!! note
 
     Fully implicit DAEs (`DAEProblem`, `F(du, u, p, t) = 0`) are supported with
-    `sensealg = InterpolatingAdjoint()` (without checkpointing), including index-1
-    DAEs and Hessenberg index-2 DAEs. The adjoint is formulated with the augmented
-    adjoint DAE of Cao, Li, Petzold & Serban (2003); see [`DAEAdjointProblem`](@ref)
-    for the supported structure and requirements. If `alg` is a DAE solver
-    (e.g. `DFBDF`), the adjoint is solved in fully implicit form with it; if it is a
-    mass-matrix-capable ODE solver (e.g. `FBDF`, `Rodas5P`), the adjoint is solved
-    in mass-matrix form.
+    `InterpolatingAdjoint`, `QuadratureAdjoint`, and `GaussAdjoint`/
+    `GaussKronrodAdjoint` (all without checkpointing) for index-1 DAEs, and with
+    `InterpolatingAdjoint` for Hessenberg index-2 DAEs, as well as through
+    `SundialsAdjoint` with `IDA` for du-linear index-1 DAEs. The adjoint is
+    formulated with the augmented adjoint DAE of Cao, Li, Petzold & Serban (2003);
+    see [`DAEAdjointProblem`](@ref) for the supported structure and requirements.
+    If `alg` is a DAE solver (e.g. `DFBDF`), the adjoint is solved in fully
+    implicit form with it; if it is a mass-matrix-capable ODE solver (e.g. `FBDF`,
+    `Rodas5P`), the adjoint is solved in mass-matrix form.
 
 ## Positional Arguments
 
@@ -537,7 +539,7 @@ function _adjoint_sensitivities(
         if rcb !== nothing && !isempty(rcb.Δλas) && dp !== nothing
             S = adj_prob.f.f
             S isa DAEAdjointResidual && (S = S.S)
-            (; structure) = rcb.diffcache
+            (; algeeq_idxs) = rcb.diffcache
             iλ = similar(rcb.λ, numstates)
             out = zero(dp')
             yy = similar(rcb.y)
@@ -546,12 +548,12 @@ function _adjoint_sensitivities(
             vjp_u_scratch = similar(rcb.y)
             for (Δλa, tt) in rcb.Δλas
                 iλ .= zero(eltype(iλ))
-                iλ[structure.algeeq_idxs] .= Δλa
+                iλ[algeeq_idxs] .= Δλa
                 sol(yy, tt)
                 sol(dyy, tt, Val{1})
-                dae_vecjacobian!(
-                    vjp_du_scratch, vjp_u_scratch, vec(out), dyy, yy, iλ,
-                    mtkp, tt, S
+                vecjacobian!(
+                    vjp_u_scratch, yy, iλ, mtkp, tt, S;
+                    dgrad = vec(out), du = dyy, ddu = vjp_du_scratch
                 )
                 dp .+= out'
             end

@@ -5,7 +5,9 @@ using SciMLSensitivity: SciMLSensitivity, SciMLBase, SciMLLogging,
     ODEQuadratureAdjointSensitivityFunction, GaussIntegrand,
     vecjacobian!, vec_pjac!, accumulate_cost!, inplace_vjp,
     ReverseDiffVJP, mutable_zeros, compile_tape, ReverseDiff,
-    canonicalize, Tunable, isscimlstructure, unwrapped_f
+    canonicalize, Tunable, isscimlstructure, unwrapped_f,
+    get_dae_paramjac_config, dae_du_jacobian, dae_u_jacobian,
+    dae_adjoint_structure
 import SciMLSensitivity: _adjoint_sensitivities
 using SciMLBase: ODEProblem, DAEProblem, isinplace
 using Sundials: Sundials, N_Vector, NVector, realtype
@@ -537,33 +539,13 @@ function _idas_set_solvers(ls_setter, alg, unv, n, ctx)
     end
 end
 
-# Records a ReverseDiff tape of the DAE residual over `(du, u[, p], t)`.
-function _idas_dae_tape(f, p, has_p, repack, du, u, tunables, t)
-    _du = collect(Float64, du)
-    _u = collect(Float64, u)
-    if has_p
-        return ReverseDiff.GradientTape(
-            (_du, _u, collect(Float64, tunables), [t])
-        ) do du_, u_, p_, t_
-            res = similar(u_, size(u_))
-            res .= false
-            f(res, du_, u_, repack(p_), first(t_))
-            return vec(res)
-        end
-    else
-        return ReverseDiff.GradientTape((_du, _u, [t])) do du_, u_, t_
-            res = similar(u_, size(u_))
-            res .= false
-            f(res, du_, u_, p, first(t_))
-            return vec(res)
-        end
-    end
-end
-
 # User data passed through the IDAS C callbacks via `IDASetUserData(B)`. With
 # `compile = true` the recorded `tape` is reused (which freezes control flow,
 # the standard `ReverseDiffVJP(true)` restriction); otherwise a fresh tape is
 # recorded at every evaluation point, matching the `vecjacobian!` convention.
+# Tapes are always recorded over `(du, u, p, t)` via the shared
+# `get_dae_paramjac_config` builder, with an empty parameter input when the
+# problem has no parameters.
 mutable struct IDASAdjointUserData{ND, F, P, RP, TU, T}
     const f::F
     const p::P
@@ -586,24 +568,20 @@ end
 # so only the input hooks need unseeding between the two reverse passes.
 function _idas_res_vjps!(data::IDASAdjointUserData, y, yp, t, yB, ypB, dgrad)
     tape = data.tape === nothing ?
-        _idas_dae_tape(
-            data.f, data.p, data.has_p, data.repack, yp, y,
-            data.tunables, t
+        get_dae_paramjac_config(
+            ReverseDiffVJP(), data.p, data.f,
+            collect(Float64, y), collect(Float64, yp),
+            data.tunables, t; isinplace = true
         ) : data.tape
-    if data.has_p
-        tdu, tu, tp, tt = ReverseDiff.input_hook(tape)
-    else
-        tdu, tu, tt = ReverseDiff.input_hook(tape)
-        tp = nothing
-    end
+    tdu, tu, tp, tt = ReverseDiff.input_hook(tape)
     output = ReverseDiff.output_hook(tape)
     ReverseDiff.unseed!(tdu)
     ReverseDiff.unseed!(tu)
-    tp === nothing || ReverseDiff.unseed!(tp)
+    ReverseDiff.unseed!(tp)
     ReverseDiff.unseed!(tt)
     ReverseDiff.value!(tdu, yp)
     ReverseDiff.value!(tu, y)
-    tp === nothing || ReverseDiff.value!(tp, data.tunables)
+    data.has_p && ReverseDiff.value!(tp, data.tunables)
     data.tscratch[1] = t
     ReverseDiff.value!(tt, data.tscratch)
     ReverseDiff.forward_pass!(tape)
@@ -615,7 +593,7 @@ function _idas_res_vjps!(data::IDASAdjointUserData, y, yp, t, yB, ypB, dgrad)
         if ypB !== nothing
             ReverseDiff.unseed!(tdu)
             ReverseDiff.unseed!(tu)
-            tp === nothing || ReverseDiff.unseed!(tp)
+            ReverseDiff.unseed!(tp)
             ReverseDiff.unseed!(tt)
         end
     end
@@ -691,23 +669,47 @@ function _idas_quad_cfunction(::T) where {T <: IDASAdjointUserData}
     )
 end
 
-# Solves `(∂F/∂du)ᵀ Δλ = gu` for the adjoint jump at a discrete cost time and
-# errors when `gu` is not in the range of `(∂F/∂du)ᵀ`, i.e. when the cost
-# depends on algebraic variables — that case needs a constraint-transfer term
-# this implementation does not provide, so failing loudly beats a silently
-# wrong gradient.
-function _idas_cost_jump(Mtpinv, Mt, gu, t)
-    Δλ = Mtpinv * gu
-    resid = Mt * Δλ .- gu
-    if norm(resid) > max(1.0e-10, 1.0e-8 * norm(gu))
+# Transfers a discrete cost jump `gu` onto the adjoint variable w = (∂F/∂du)ᵀλ
+# at a cost time, applying the index-1 consistency correction shared with the
+# native `ReverseLossCallback` machinery when the cost touches algebraic
+# variables:
+#
+#     Δλa = -(dhda' \ gu[algvars]),   Δw[diffvars] = gu[diffvars] + dhdd' Δλa
+#
+# with the parameter-gradient correction Δλa' ∂F_algeqs/∂p accumulated into
+# `dp_corr` (when non-`nothing`). Returns the jump Δw in w-space and the λ jump
+# solving `(∂F/∂du)ᵀ Δλ = Δw`.
+function _idas_cost_jump!(dp_corr, data, structure, Mtpinv, Mt, gu, y_s, yp_s, s)
+    diffvar_idxs, algevar_idxs, diffeq_idxs, algeeq_idxs = structure
+    Δw = gu
+    if !isempty(algevar_idxs)
+        J_u = dae_u_jacobian(data.f, true, yp_s, y_s, data.p, s)
+        dhdd = J_u[algeeq_idxs, diffvar_idxs]
+        dhda = J_u[algeeq_idxs, algevar_idxs]
+        Δλa = -(dhda' \ gu[algevar_idxs])
+        Δw = zeros(length(gu))
+        Δw[diffvar_idxs] .= @view(gu[diffvar_idxs])
+        Δw[diffvar_idxs] .+= dhdd' * Δλa
+        if dp_corr !== nothing
+            iλ = zeros(length(gu))
+            iλ[algeeq_idxs] .= Δλa
+            out = similar(dp_corr)
+            _idas_res_vjps!(data, y_s, yp_s, s, iλ, nothing, out)
+            dp_corr .+= out
+        end
+    end
+    Δλ = Mtpinv * Δw
+    resid = Mt * Δλ .- Δw
+    if norm(resid) > max(1.0e-10, 1.0e-8 * norm(Δw))
         error(
-            "SundialsAdjoint with `IDA` does not support discrete cost gradients " *
-                "(`dgdu_discrete`) with nonzero components for algebraic variables " *
-                "(detected at t = $t). Formulate the cost in terms of the " *
-                "differential variables of the DAE."
+            "SundialsAdjoint with `IDA` could not transfer the discrete cost jump " *
+                "onto the adjoint at t = $s: the (index-1 corrected) jump is not in " *
+                "the range of `(∂F/∂du)ᵀ`. This typically indicates a higher-index " *
+                "or structurally degenerate DAE; use the native " *
+                "`InterpolatingAdjoint` DAEProblem support instead."
         )
     end
-    return Δλ
+    return Δλ, Δw
 end
 
 function _adjoint_sensitivities(
@@ -798,9 +800,13 @@ function _adjoint_sensitivities(
     n = length(u0)
     np = length(tunables)
     f = unwrapped_f(prob.f)
+    u0v = collect(Float64, vec(u0))
+    du0v = collect(Float64, vec(du0))
     tape = compile_tape(vjp) ?
-        ReverseDiff.compile(_idas_dae_tape(f, p, has_p, repack, du0, u0, tunables, t0)) :
-        nothing
+        get_dae_paramjac_config(
+            vjp, p, f, u0v, du0v, has_p ? collect(Float64, tunables) : Float64[],
+            t0; isinplace = true
+        ) : nothing
     data = IDASAdjointUserData(
         f, p, repack, has_p ? mutable_zeros(tunables) : Float64[], has_p,
         size(u0), n, tape, zeros(n), zeros(n), [t0]
@@ -810,20 +816,26 @@ function _adjoint_sensitivities(
     adj_cfun = _idas_adjoint_cfunction(data)
     quad_cfun = has_p ? _idas_quad_cfunction(data) : nothing
 
-    u0v = collect(Float64, vec(u0))
-    du0v = collect(Float64, vec(du0))
-
     # `Mt = (∂F/∂du)ᵀ`, constant by assumption; used to transfer discrete cost
     # jumps onto the adjoint variables and for the `du0` boundary term.
-    Mt = zeros(n, n)
-    eseed = zeros(n)
-    for i in 1:n
-        eseed[i] = 1.0
-        _idas_res_vjps!(data, u0v, du0v, t0, nothing, eseed, nothing)
-        Mt[:, i] .= data.ddu
-        eseed[i] = 0.0
-    end
+    Mt = collect(dae_du_jacobian(f, true, du0v, u0v, p, t0)')
     Mtpinv = pinv(Mt)
+
+    # Algebraic equation/variable structure for the index-1 cost-jump
+    # correction (shared with the native DAE adjoint machinery). Hessenberg
+    # index-2 systems are rejected on this route: `IDACalcICB` cannot compute
+    # consistent backward initial conditions for them.
+    diffvar_idxs, algevar_idxs, diffeq_idxs, algeeq_idxs,
+        index2 = dae_adjoint_structure(
+        f, true, du0v, u0v, p, t0, diffvars
+    )
+    index2 &&
+        error(
+        "SundialsAdjoint with `IDA` does not support Hessenberg index-2 DAEs. " *
+            "Use the native `InterpolatingAdjoint`/`QuadratureAdjoint`/`GaussAdjoint` " *
+            "DAEProblem support instead."
+    )
+    structure = (diffvar_idxs, algevar_idxs, diffeq_idxs, algeeq_idxs)
 
     # Best-effort screen for the constant-∂F/∂du assumption: compare the vjp at
     # a second, perturbed point. Skipped if the residual cannot be evaluated
@@ -930,7 +942,9 @@ function _adjoint_sensitivities(
             )
 
             # Backward (adjoint) problem. λ(tf) collects the cost jumps at tf,
-            # transferred through `(∂F/∂du)ᵀ Δλ = gu`.
+            # transferred through `(∂F/∂du)ᵀ Δλ = Δw` with the index-1
+            # correction; `yret`/`ypret` hold the forward terminal state from
+            # `IDASolveF`.
             cur_time = length(ts)
             if cur_time >= 1 && ts[cur_time] == tf
                 y_f = sol(tf)
@@ -938,7 +952,10 @@ function _adjoint_sensitivities(
                     if !(no_start && cur_time == 1)
                         fill!(gu, false)
                         dgdu_discrete(gu, y_f, p, tf, cur_time)
-                        λ .+= _idas_cost_jump(Mtpinv, Mt, gu, tf)
+                        Δλ, _ = _idas_cost_jump!(
+                            dp, data, structure, Mtpinv, Mt, gu, yret, ypret, tf
+                        )
+                        λ .+= Δλ
                         if dgdp_discrete !== nothing
                             fill!(gp, false)
                             dgdp_discrete(gp, y_f, p, tf, cur_time)
@@ -1023,11 +1040,21 @@ function _adjoint_sensitivities(
                     end
                     tcur = s
                     y_s = sol(s)
+                    # The forward `(y, y')` at the stop time, for the jump
+                    # correction Jacobians and for `IDACalcICB` below.
+                    _check_idas_flag(
+                        Sundials.IDAGetAdjY(mem, s, yinterp_nv, ypinterp_nv),
+                        "IDAGetAdjY"
+                    )
                     while cur_time >= 1 && ts[cur_time] == s
                         if !(no_start && cur_time == 1)
                             fill!(gu, false)
                             dgdu_discrete(gu, y_s, p, s, cur_time)
-                            λ .+= _idas_cost_jump(Mtpinv, Mt, gu, s)
+                            Δλ, _ = _idas_cost_jump!(
+                                dp, data, structure, Mtpinv, Mt, gu, yinterp,
+                                ypinterp, s
+                            )
+                            λ .+= Δλ
                             if dgdp_discrete !== nothing
                                 fill!(gp, false)
                                 dgdp_discrete(gp, y_s, p, s, cur_time)
@@ -1048,10 +1075,6 @@ function _adjoint_sensitivities(
                     end
                     next_stop = cur_time >= 1 && ts[cur_time] > t0 && ts[cur_time] < s ?
                         ts[cur_time] : t0
-                    _check_idas_flag(
-                        Sundials.IDAGetAdjY(mem, s, yinterp_nv, ypinterp_nv),
-                        "IDAGetAdjY"
-                    )
                     _check_idas_flag(
                         Sundials.IDACalcICB(
                             mem, which[], next_stop, yinterp_nv,
@@ -1084,7 +1107,7 @@ function _adjoint_sensitivities(
 
             # Gradient w.r.t. the initial state: the adjoint boundary term
             # `(∂F/∂du)ᵀ λ(t0)`, plus any cost jump exactly at t0 (which enters
-            # `dG/du0` directly, not through the transform).
+            # `dG/du0` in w-space directly, with the index-1 correction).
             mul!(du0_grad, Mt, λ)
             while cur_time >= 1
                 s = ts[cur_time]
@@ -1094,9 +1117,10 @@ function _adjoint_sensitivities(
                     y_s = sol(s)
                     fill!(gu, false)
                     dgdu_discrete(gu, y_s, p, s, cur_time)
-                    # Range check only; jumps at t0 are added to `du0_grad` as-is.
-                    _idas_cost_jump(Mtpinv, Mt, gu, s)
-                    du0_grad .+= gu
+                    _, Δw = _idas_cost_jump!(
+                        dp, data, structure, Mtpinv, Mt, gu, u0v, du0v, s
+                    )
+                    du0_grad .+= Δw
                     if dgdp_discrete !== nothing
                         fill!(gp, false)
                         dgdp_discrete(gp, y_s, p, s, cur_time)

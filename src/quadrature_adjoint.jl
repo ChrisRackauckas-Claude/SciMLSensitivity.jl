@@ -234,7 +234,7 @@ allocates and returns that value.
 """
 struct AdjointSensitivityIntegrand{
         pType, uType, lType, rateType, S, AS, PF, PJC, PJT, DGP,
-        G, tType, rType, UF,
+        G, tType, rType, UF, DUT,
     }
     sol::S
     adj_sol::AS
@@ -254,6 +254,9 @@ struct AdjointSensitivityIntegrand{
     # out of a FunctionWrappersWrapper is dynamic and would otherwise dominate
     # every `vec_pjac!` call.
     unwrappedf::UF
+    # Derivative interpolation buffer for fully implicit DAE residuals; `nothing`
+    # for ODE problems.
+    dy::DUT
 end
 
 function AdjointSensitivityIntegrand(sol, adj_sol, sensealg, dgdp = nothing)
@@ -281,9 +284,21 @@ function AdjointSensitivityIntegrand(sol, adj_sol, sensealg, dgdp = nothing)
     f_cache = zero(y)
     isautojacvec = get_jacvec(sensealg)
 
-    unwrappedf = unwrapped_f(f)
+    unwrappedf = prob isa SciMLBase.AbstractDAEProblem ? dae_unwrapped_f(f) :
+        unwrapped_f(f)
 
     dgdp_cache = dgdp === nothing ? nothing : zero(tunables)
+
+    if prob isa SciMLBase.AbstractDAEProblem
+        dy = zero(y)
+        pf, pJ, paramjac_config = dae_integrand_paramjac_config(
+            sensealg, prob, unwrappedf, y, dy, tunables, repack, tspan[2]
+        )
+        return AdjointSensitivityIntegrand(
+            sol, adj_sol, p, y, λ, pf, f_cache, pJ, paramjac_config,
+            sensealg, dgdp_cache, dgdp, tunables, repack, unwrappedf, dy
+        )
+    end
 
     if sensealg.autojacvec isa ReverseDiffVJP
         tape = if DiffEqBase.isinplace(prob)
@@ -346,7 +361,7 @@ function AdjointSensitivityIntegrand(sol, adj_sol, sensealg, dgdp = nothing)
     end
     return AdjointSensitivityIntegrand(
         sol, adj_sol, p, y, λ, pf, f_cache, pJ, paramjac_config,
-        sensealg, dgdp_cache, dgdp, tunables, repack, unwrappedf
+        sensealg, dgdp_cache, dgdp, tunables, repack, unwrappedf, nothing
     )
 end
 
@@ -362,6 +377,8 @@ _enzyme_vecpjac_dot(f, repack, y, tunables, t, λ) = dot(vec(f(y, repack(tunable
 
 # out = λ df(u, p, t)/dp at u=y, p=p, t=t
 function vec_pjac!(out, λ, y, t, S::AdjointSensitivityIntegrand)
+    # Fully implicit DAE residuals take the p-vjp of F(du, u, p, t) instead.
+    S.dy === nothing || return dae_vec_pjac!(out, λ, y, t, S)
     (; pJ, pf, p, f_cache, dgdp_cache, paramjac_config, sensealg, sol, adj_sol, tunables, repack) = S
     _odef = sol.prob.f
     f = S.unwrappedf
@@ -515,7 +532,13 @@ function (S::AdjointSensitivityIntegrand)(out, t)
         y = sol(t)
         λ = adj_sol(t)
     end
-    vec_pjac!(out, λ, y, t, S)
+    # The DAE adjoint state is z = [w; λ]: extract the λ block.
+    _λ = S.dy === nothing ? λ : @view(λ[(length(y) + 1):(2 * length(y))])
+    vec_pjac!(out, _λ, y, t, S)
+    # For the residual convention F(du, u, p, t) = 0 the parameter-gradient
+    # integrand is g_p - λ'F_p, while the raw p-vjp is +F_p'λ (which is what the
+    # boundary-jump corrections need), so negate it here.
+    S.dy === nothing || recursive_neg!(out)
 
     if S.dgdp !== nothing
         S.dgdp(dgdp_cache, y, p, t)
@@ -542,19 +565,34 @@ function _adjoint_sensitivities(
         kwargs...
     )
     adj_prob,
-        rcb = ODEAdjointProblem(
-        sol, sensealg, alg, t, dgdu_discrete, dgdp_discrete,
-        dgdu_continuous, dgdp_continuous, g, Val(true);
-        callback, no_start
-    )
+        rcb = if sol.prob isa SciMLBase.AbstractDAEProblem
+        DAEAdjointProblem(
+            sol, sensealg, alg, t, dgdu_discrete, dgdp_discrete,
+            dgdu_continuous, dgdp_continuous, g, Val(true);
+            callback, no_start
+        )
+    else
+        ODEAdjointProblem(
+            sol, sensealg, alg, t, dgdu_discrete, dgdp_discrete,
+            dgdu_continuous, dgdp_continuous, g, Val(true);
+            callback, no_start
+        )
+    end
     adj_sol = solve(
         adj_prob, alg; abstol, reltol,
         save_everystep = true, save_start = true, kwargs...
     )
 
+    # The DAE adjoint state is z = [w; λ] with dG/du0 = w(t0).
+    du0 = if sol.prob isa SciMLBase.AbstractDAEProblem
+        state_values(adj_sol)[end][1:length(state_values(sol.prob))]
+    else
+        state_values(adj_sol)[end]
+    end
+
     p = sol.prob.p
     if p === nothing || p === SciMLBase.NullParameters()
-        return state_values(adj_sol)[end], nothing
+        return du0, nothing
     else
         integrand = AdjointSensitivityIntegrand(sol, adj_sol, sensealg, dgdp_continuous)
         if t === nothing
@@ -643,22 +681,22 @@ function _adjoint_sensitivities(
             yy = similar(rcb.y)
             yy .= false
             for (Δλa, tt) in rcb.Δλas
-                (; algevar_idxs) = rcb.diffcache
-                iλ[algevar_idxs] .= Δλa
+                (; algeeq_idxs) = rcb.diffcache
+                iλ[algeeq_idxs] .= Δλa
                 sol(yy, tt)
                 vec_pjac!(out, iλ, yy, tt, integrand)
                 res .+= out'
                 iλ .= zero(eltype(iλ))
             end
         end
-        return state_values(adj_sol)[end], res
+        return du0, res
     end
 end
 
 function update_p_integrand(integrand::AdjointSensitivityIntegrand, p)
     (;
         sol, adj_sol, y, λ, pf, f_cache, pJ, paramjac_config,
-        sensealg, dgdp_cache, dgdp, unwrappedf,
+        sensealg, dgdp_cache, dgdp, unwrappedf, dy,
     ) = integrand
     _use_full_p = hasproperty(sensealg, :diff_tunables) &&
         sensealg.diff_tunables isa Val{false} &&
@@ -672,7 +710,7 @@ function update_p_integrand(integrand::AdjointSensitivityIntegrand, p)
     end
     return AdjointSensitivityIntegrand(
         sol, adj_sol, p, y, λ, pf, f_cache, pJ, paramjac_config,
-        sensealg, dgdp_cache, dgdp, tunables, repack, unwrappedf
+        sensealg, dgdp_cache, dgdp, tunables, repack, unwrappedf, dy
     )
 end
 
@@ -739,7 +777,8 @@ function _update_integrand_and_dgrad(
             nothing, nothing, nothing, paramjac_config,
             nothing, nothing, nothing, nothing, nothing,
             nothing, nothing, nothing, false,
-            nothing, identity
+            nothing, identity,
+            nothing, nothing, false, false
         )
 
         fakeSp = CallbackSensitivityFunctionPSwap(wp, cb_sensealg, diffcache_wp, sol.prob)

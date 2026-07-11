@@ -256,14 +256,30 @@ end
 function vecjacobian!(
         dλ, y, λ, p, t, S::TS;
         dgrad = nothing, dy = nothing,
-        W = nothing
+        W = nothing, du = nothing, ddu = nothing
     ) where {TS <: SensitivityFunction}
-    if _f_has_vjp(S.f)
+    if du !== nothing
+        # Fully implicit DAE residual F(du, u, p, t): `du` is the derivative
+        # evaluation point and `ddu` receives the vjp with respect to it.
+        _vecjacobian!(dλ, y, λ, p, t, S, S.sensealg.autojacvec, dgrad, dy, W, du, ddu)
+    elseif _f_has_vjp(S.f)
         _vecjacobian_vjp!(dλ, y, λ, p, t, S, dgrad, dy, W)
     else
         _vecjacobian!(dλ, y, λ, p, t, S, S.sensealg.autojacvec, dgrad, dy, W)
     end
     return
+end
+
+# Fallback for autojacvec backends without support for fully implicit DAE
+# residual functions.
+function _vecjacobian!(
+        dλ, y, λ, p, t, S::TS, isautojacvec, dgrad, dy, W, du,
+        ddu
+    ) where {TS <: SensitivityFunction}
+    error(
+        "$(nameof(typeof(isautojacvec))) is not currently supported for DAEProblem adjoints. " *
+            "Use `ReverseDiffVJP()`, `EnzymeVJP()`, `ZygoteVJP()`, `TrackerVJP()`, or `autojacvec = false`."
+    )
 end
 
 function vecjacobian(
@@ -1150,6 +1166,272 @@ function _vecjacobian!(
         dy !== nothing && recursive_copyto!(dy, tmp3)
     end
     return
+end
+
+# ---------------------------------------------------------------------------
+# Fully implicit DAE residual vjps: F(du, u, p, t) with the vjps with respect to
+# `du`, `u`, and `p` computed in a single reverse pass. `du` is the derivative
+# evaluation point (from the forward solution's derivative interpolation) and
+# `ddu` receives `(∂F/∂(du))'λ`.
+# ---------------------------------------------------------------------------
+
+function _vecjacobian!(
+        dλ, y, λ, p, t, S::TS, isautojacvec::ReverseDiffVJP, dgrad, dy,
+        W, du, ddu
+    ) where {TS <: SensitivityFunction}
+    prob = getprob(S)
+    f = dae_unwrapped_f(S.f)
+    (; tunables, repack) = S.diffcache
+    u0 = state_values(prob)
+
+    if p === nothing || p isa SciMLBase.NullParameters
+        _p = similar(y, (0,))
+        _p .= false
+        _tunables = _p
+    else
+        _p = tunables
+        _tunables = tunables
+    end
+
+    if eltype(λ) <: eltype(u0) && t isa eltype(u0) && compile_tape(isautojacvec)
+        tape = S.diffcache.paramjac_config
+    else
+        # Dual numbers from the (stiff) adjoint solver's AD require retaping with
+        # promoted element types, mirroring the ODE path above.
+        _y = eltype(y) === eltype(λ) ? y : convert.(promote_type(eltype(y), eltype(λ)), y)
+        _du = eltype(du) === eltype(λ) ? du :
+            convert.(promote_type(eltype(du), eltype(λ)), du)
+        tape = if inplace_sensitivity(S)
+            ReverseDiff.GradientTape((_du, _y, _p, [t])) do du, u, p, t
+                res = similar(u, size(u))
+                res .= false
+                f(res, du, u, repack(p), first(t))
+                return vec(res)
+            end
+        else
+            ReverseDiff.GradientTape((_du, _y, _p, [t])) do du, u, p, t
+                vec(f(du, u, repack(p), first(t)))
+            end
+        end
+    end
+
+    tdu, tu, tp, tt = ReverseDiff.input_hook(tape)
+    output = ReverseDiff.output_hook(tape)
+    ReverseDiff.unseed!(tdu)
+    ReverseDiff.unseed!(tu)
+    ReverseDiff.unseed!(tp)
+    ReverseDiff.unseed!(tt)
+    ReverseDiff.value!(tdu, du)
+    ReverseDiff.value!(tu, y)
+    p isa SciMLBase.NullParameters || ReverseDiff.value!(tp, _tunables)
+    ReverseDiff.value!(tt, [t])
+    ReverseDiff.forward_pass!(tape)
+    ReverseDiff.increment_deriv!(output, λ)
+    ReverseDiff.reverse_pass!(tape)
+    ddu !== nothing && copyto!(vec(ddu), ReverseDiff.deriv(tdu))
+    dλ !== nothing && copyto!(vec(dλ), ReverseDiff.deriv(tu))
+    dgrad !== nothing && !isempty(dgrad) && copyto!(vec(dgrad), ReverseDiff.deriv(tp))
+    return nothing
+end
+
+function _vecjacobian!(
+        dλ, y, λ, p, t, S::TS, isautojacvec::ZygoteVJP, dgrad, dy,
+        W, du, ddu
+    ) where {TS <: SensitivityFunction}
+    inplace_sensitivity(S) &&
+        error("`ZygoteVJP` requires an out-of-place DAE residual `f(du, u, p, t)`. Use `ReverseDiffVJP()` or `EnzymeVJP()` for in-place residuals.")
+    f = dae_unwrapped_f(S.f)
+    (; tunables, repack) = S.diffcache
+
+    if p === nothing || p isa SciMLBase.NullParameters
+        _, back = Zygote.pullback(du, y) do du, u
+            vec(f(du, u, p, t))
+        end
+        tmp_du, tmp_u = back(λ)
+        tmp_p = nothing
+    else
+        _, back = Zygote.pullback(du, y, tunables) do du, u, _tunables
+            vec(f(du, u, repack(_tunables), t))
+        end
+        tmp_du, tmp_u, tmp_p = back(λ)
+    end
+
+    if ddu !== nothing
+        if tmp_du !== nothing
+            copyto!(vec(ddu), vec(tmp_du))
+        elseif isautojacvec.allow_nothing
+            ddu .= false
+        else
+            throw(ZygoteVJPNothingError())
+        end
+    end
+    if dλ !== nothing
+        if tmp_u !== nothing
+            copyto!(vec(dλ), vec(tmp_u))
+        elseif isautojacvec.allow_nothing
+            dλ .= false
+        else
+            throw(ZygoteVJPNothingError())
+        end
+    end
+    if dgrad !== nothing && !isempty(dgrad)
+        if tmp_p !== nothing
+            copyto!(vec(dgrad), vec(tmp_p))
+        elseif isautojacvec.allow_nothing
+            dgrad .= false
+        else
+            throw(ZygoteVJPNothingError())
+        end
+    end
+    return nothing
+end
+
+function _vecjacobian!(
+        dλ, y, λ, p, t, S::TS, isautojacvec::TrackerVJP, dgrad, dy,
+        W, du, ddu
+    ) where {TS <: SensitivityFunction}
+    (; sensealg) = S
+    f = dae_unwrapped_f(S.f)
+
+    if inplace_sensitivity(S)
+        _res, back = Tracker.forward(du, y, p) do du, u, p
+            out_ = map(zero, u)
+            f(out_, du, u, p, t)
+            Tracker.collect(out_)
+        end
+    else
+        _res, back = Tracker.forward(du, y, p) do du, u, p
+            Tracker.collect(f(du, u, p, t))
+        end
+    end
+
+    if !(typeof(_res) isa TrackedArray) && !(eltype(_res) <: Tracker.TrackedReal) &&
+            !sensealg.autojacvec.allow_nothing
+        throw(TrackerVJPNothingError())
+    end
+
+    tmp_du, tmp_u, tmp_p = Tracker.data.(back(λ))
+    ddu !== nothing && recursive_copyto!(ddu, tmp_du)
+    dλ !== nothing && recursive_copyto!(dλ, tmp_u)
+    dgrad !== nothing && !isempty(dgrad) && recursive_copyto!(dgrad, tmp_p)
+    return nothing
+end
+
+_enzyme_dae_vecjac_dot(f, du, u, p, t, λ) = dot(vec(f(du, u, p, t)), vec(λ))
+
+function _vecjacobian!(
+        dλ, y, λ, p, t, S::TS, isautojacvec::EnzymeVJP, dgrad, dy,
+        W, du, ddu
+    ) where {TS <: SensitivityFunction}
+    f = dae_unwrapped_f(S.f)
+    enzyme_mode = isautojacvec.mode
+
+    if !inplace_sensitivity(S)
+        # Out-of-place residual: form the vjps as the reverse-mode gradient of
+        # `λ ⋅ F(du, u, p, t)` with respect to `(du, u, p)`.
+        _p = (dgrad === nothing || isempty(dgrad)) ? Enzyme.Const(p) : p
+        res = Enzyme.gradient(
+            enzyme_mode, _enzyme_dae_vecjac_dot, Enzyme.Const(f), du, y, _p,
+            Enzyme.Const(t), Enzyme.Const(λ)
+        )
+        ddu !== nothing && recursive_copyto!(ddu, res[2])
+        dλ !== nothing && recursive_copyto!(dλ, res[3])
+        dgrad !== nothing && !isempty(dgrad) && recursive_copyto!(dgrad, res[4])
+        return nothing
+    end
+
+    p isa Union{AbstractArray, SciMLBase.NullParameters} ||
+        error("`EnzymeVJP` currently requires `AbstractArray` parameters for DAEProblem adjoints. Use `ReverseDiffVJP()` for structured parameters.")
+
+    # In-place residual F(res, du, u, p, t): one autodiff call with `Duplicated`
+    # buffers for the residual, `du`, `u`, and `p` yields all three vjps. The
+    # config layout is the standard Enzyme config extended with (du primal,
+    # du shadow) buffers; see `adjointdiffcache`.
+    _tmp1, tmp2, _tmp3, _tmp4, _tmp5, _dutmp, _dushadow, _tmp6,
+        _cached_shadow = S.diffcache.paramjac_config
+
+    if _tmp1 isa LazyBufferCache
+        _cache_tmpl = eltype(λ) === eltype(y) ? y : similar(y, eltype(λ))
+        tmp1 = get_tmp(_tmp1, _cache_tmpl)
+        tmp3 = get_tmp(_tmp3, _cache_tmpl)
+        tmp4 = get_tmp(_tmp4, _cache_tmpl)
+        ytmp = get_tmp(_tmp5, _cache_tmpl)
+        dutmp = get_tmp(_dutmp, _cache_tmpl)
+        dushadow = get_tmp(_dushadow, _cache_tmpl)
+    else
+        tmp1 = _tmp1
+        tmp3 = _tmp3
+        tmp4 = _tmp4
+        ytmp = _tmp5
+        dutmp = _dutmp
+        dushadow = _dushadow
+    end
+
+    Enzyme.remake_zero!(tmp1)
+    Enzyme.remake_zero!(dushadow)
+    vec(ytmp) .= vec(y)
+    vec(dutmp) .= vec(du)
+
+    _skip_p_grad = (dgrad === nothing || isempty(dgrad)) ||
+        tmp2 isa SciMLBase.NullParameters
+    dup = if !_skip_p_grad
+        Enzyme.remake_zero!(tmp2)
+        Enzyme.Duplicated(p, tmp2)
+    else
+        Enzyme.Const(p)
+    end
+
+    Enzyme.remake_zero!(tmp3)
+    vec(tmp4) .= vec(λ)
+
+    # A residual with no captured state is a ghost type that Enzyme rejects in
+    # `Duplicated`; pass it as `Const` instead.
+    vf = SciMLBase.Void(f)
+    fdup = if Base.issingletontype(typeof(vf))
+        Enzyme.Const(vf)
+    else
+        Enzyme.remake_zero!(_tmp6)
+        Enzyme.Duplicated(vf, _tmp6)
+    end
+
+    Enzyme.autodiff(
+        enzyme_mode, fdup,
+        Enzyme.Const, Enzyme.Duplicated(tmp3, tmp4),
+        Enzyme.Duplicated(dutmp, dushadow),
+        Enzyme.Duplicated(ytmp, tmp1),
+        dup,
+        Enzyme.Const(t)
+    )
+    ddu !== nothing && recursive_copyto!(ddu, dushadow)
+    dλ !== nothing && recursive_copyto!(dλ, tmp1)
+    if dgrad !== nothing && !isempty(dgrad) && !(tmp2 isa SciMLBase.NullParameters)
+        recursive_copyto!(dgrad, tmp2)
+    end
+    return nothing
+end
+
+function _vecjacobian!(
+        dλ, y, λ, p, t, S::TS, isautojacvec::Bool, dgrad, dy,
+        W, du, ddu
+    ) where {TS <: SensitivityFunction}
+    isautojacvec &&
+        error("`autojacvec = true` is not supported for DAEProblem adjoints. Use `ReverseDiffVJP()`, `EnzymeVJP()`, `ZygoteVJP()`, `TrackerVJP()`, or `autojacvec = false`.")
+    f = dae_unwrapped_f(S.f)
+    isinplace = inplace_sensitivity(S)
+    (; tunables, repack) = S.diffcache
+    if ddu !== nothing
+        J_du = dae_du_jacobian(f, isinplace, du, y, p, t)
+        mul!(vec(ddu), J_du', λ)
+    end
+    if dλ !== nothing
+        J_u = dae_u_jacobian(f, isinplace, du, y, p, t)
+        mul!(vec(dλ), J_u', λ)
+    end
+    if dgrad !== nothing && !isempty(dgrad)
+        pJ = dae_p_jacobian(f, isinplace, du, y, p, t, tunables, repack)
+        mul!(vec(dgrad), pJ', λ)
+    end
+    return nothing
 end
 
 function _vecjacobian!(dλ, y, λ, p, t, S::SensitivityFunction, ::MooncakeVJP, dgrad, dy, W)

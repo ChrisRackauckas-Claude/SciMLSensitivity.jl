@@ -478,7 +478,10 @@ documentation page or the docstrings of the vjp types.
 
 ## SciMLProblem Support
 
-This `sensealg` only supports `ODEProblem`s. This `sensealg` supports events (callbacks).
+This `sensealg` supports `ODEProblem`s and fully implicit index-1 `DAEProblem`s
+(without callbacks; Hessenberg index-2 DAEs are rejected — use
+`InterpolatingAdjoint` for those; see [`DAEAdjointProblem`](@ref)). This
+`sensealg` supports events (callbacks) for `ODEProblem`s.
 
 ## References
 
@@ -583,7 +586,10 @@ documentation page or the docstrings of the vjp types.
 
 ## SciMLProblem Support
 
-This `sensealg` only supports `ODEProblem`s. This `sensealg` supports events (callbacks).
+This `sensealg` supports `ODEProblem`s and fully implicit index-1 `DAEProblem`s
+(without callbacks; Hessenberg index-2 DAEs are rejected — use
+`InterpolatingAdjoint` for those; see [`DAEAdjointProblem`](@ref)). This
+`sensealg` supports events (callbacks) for `ODEProblem`s.
 
 ## References
 
@@ -681,7 +687,10 @@ documentation page or the docstrings of the vjp types.
 
 ## SciMLProblem Support
 
-This `sensealg` only supports `ODEProblem`s. This `sensealg` supports events (callbacks).
+This `sensealg` supports `ODEProblem`s and fully implicit index-1 `DAEProblem`s
+(without callbacks; Hessenberg index-2 DAEs are rejected — use
+`InterpolatingAdjoint` for those; see [`DAEAdjointProblem`](@ref)). This
+`sensealg` supports events (callbacks) for `ODEProblem`s.
 
 ## References
 
@@ -811,15 +820,19 @@ in `du` with a constant (state- and time-independent) Jacobian `∂F/∂du`**, i
 mass-matrix-style and semi-explicit index-1 DAEs written implicitly. The
 backward residual omits the `d/dt (∂F/∂du)ᵀ λ` term, which only vanishes under
 this assumption (a best-effort runtime check errors when a state/time-dependent
-`∂F/∂du` is detected). Additional current restrictions: only discrete cost
-functionals (`t` with `dgdu_discrete`/`dgdp_discrete`) are supported, the cost
-gradient must have zero components with respect to algebraic variables,
-`differential_vars` must be specified (used for consistent initialization of
-the backward problem via `IDACalcICB`), and only `autojacvec = ReverseDiffVJP()`
-is available. The returned `du0` is the adjoint boundary term
-`(∂F/∂du)ᵀ λ |_{t0}`, i.e. the gradient with respect to the differential
-components of `u0` (algebraic components of `u0` are determined by consistency,
-and their entries are zero for semi-explicit systems).
+`∂F/∂du` is detected). Discrete cost gradients may have nonzero components with
+respect to algebraic variables: the jumps are transferred onto the adjoint with
+the index-1 consistency correction shared with the native DAEProblem adjoint
+machinery. Hessenberg index-2 DAEs are rejected on this route (use the native
+`InterpolatingAdjoint` DAE support instead). Additional current restrictions:
+only discrete cost functionals (`t` with `dgdu_discrete`/`dgdp_discrete`) are
+supported, `differential_vars` must be specified (used for consistent
+initialization of the backward problem via `IDACalcICB`), and only
+`autojacvec = ReverseDiffVJP()` is available. The returned `du0` is the adjoint
+boundary term `(∂F/∂du)ᵀ λ |_{t0}` (plus corrected cost jumps at `t0`), i.e. the
+gradient with respect to the differential components of `u0` (algebraic
+components of `u0` are determined by consistency, and their entries are zero for
+semi-explicit systems).
 
 ## References
 
