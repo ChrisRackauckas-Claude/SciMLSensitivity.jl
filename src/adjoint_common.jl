@@ -156,11 +156,7 @@ function adjointdiffcache(
             algevar_idxs = setdiff(eachindex(u0), diffvar_idxs)
 
             # TODO: operator
-            if VERSION >= v"1.8-"
-                M̃ = @view mass_matrix[diffvar_idxs, diffvar_idxs]
-            else
-                M̃ = mass_matrix[diffvar_idxs, diffvar_idxs]
-            end
+            M̃ = @view mass_matrix[diffvar_idxs, diffvar_idxs]
 
             factorized_mass_matrix = lu(M̃, check = false)
             issuccess(factorized_mass_matrix) ||

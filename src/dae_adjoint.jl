@@ -449,12 +449,20 @@ function _dae_adjoint_problem(
     withgrad && (mmdiag[(2 * numstates + 1):len] .= one(eltype(z0)))
 
     # The algebraic λ rows must be (re-)solved consistently at the terminal time and
-    # after every discrete-cost jump; `BrownFullBasicInit` does exactly that and its
-    # initialization system is the adjoint consistency condition of Cao et al. For
-    # Hessenberg index-2 DAEs that system is singular (the index-2 adjoint multiplier
-    # only appears under differentiation), so skip initialization and let the BDF
-    # discretization determine the multiplier from the second step on; the terminal
-    # λ value is never used by the gradient extraction.
+    # after every discrete-cost jump. `BrownFullBasicInit` does exactly that (it
+    # modifies only the algebraic variables), and its initialization system is the
+    # adjoint consistency condition of Cao et al. For Hessenberg index-2 DAEs that
+    # system is singular (the index-2 adjoint multiplier only appears under
+    # differentiation). The natural next choice, `ShampineCollocationInit` (a BDF1
+    # collocation consistency solve), is *not* usable here: it modifies all
+    # variables, including the differential adjoint components `w`/`grad` whose
+    # terminal (and post-jump) values are prescribed boundary conditions
+    # (`w(T) = 0`, and the jump sets them), so it corrupts the boundary data and
+    # returns the wrong gradient. Instead use `NoInit`: `z(T) = 0` is already
+    # consistent for the homogeneous augmented system, and after each jump the
+    # `derivative_discontinuity!` in the callback lets the BDF discretization
+    # resolve the index-2 multiplier from the following step (the terminal `λ`
+    # value itself is never read by the gradient extraction).
     initializealg = sense.diffcache.index2 ? SciMLBase.NoInit() :
         BrownFullBasicInit()
 

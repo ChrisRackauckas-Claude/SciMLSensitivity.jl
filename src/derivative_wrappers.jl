@@ -253,30 +253,28 @@ function _f_has_vjp(f)
     return f isa SciMLBase.AbstractSciMLFunction && SciMLBase.has_vjp(f)
 end
 
+# `du`/`ddu` are set only for fully implicit DAE residuals F(du, u, p, t): `du` is
+# the derivative evaluation point and `ddu` receives the vjp with respect to it.
+# They thread through the same per-backend `_vecjacobian!` methods as the ODE
+# case (each branches internally to a `_dae_vecjacobian!` helper), so DAE support
+# lives exactly where a backend already does, rather than as a parallel dispatch;
+# a backend without a DAE branch (e.g. Mooncake, Reactant) errors in-method.
 function vecjacobian!(
         dλ, y, λ, p, t, S::TS;
         dgrad = nothing, dy = nothing,
         W = nothing, du = nothing, ddu = nothing
     ) where {TS <: SensitivityFunction}
-    if du !== nothing
-        # Fully implicit DAE residual F(du, u, p, t): `du` is the derivative
-        # evaluation point and `ddu` receives the vjp with respect to it.
-        _vecjacobian!(dλ, y, λ, p, t, S, S.sensealg.autojacvec, dgrad, dy, W, du, ddu)
-    elseif _f_has_vjp(S.f)
+    if du === nothing && _f_has_vjp(S.f)
         _vecjacobian_vjp!(dλ, y, λ, p, t, S, dgrad, dy, W)
     else
-        _vecjacobian!(dλ, y, λ, p, t, S, S.sensealg.autojacvec, dgrad, dy, W)
+        _vecjacobian!(dλ, y, λ, p, t, S, S.sensealg.autojacvec, dgrad, dy, W, du, ddu)
     end
     return
 end
 
-# Fallback for autojacvec backends without support for fully implicit DAE
-# residual functions.
-function _vecjacobian!(
-        dλ, y, λ, p, t, S::TS, isautojacvec, dgrad, dy, W, du,
-        ddu
-    ) where {TS <: SensitivityFunction}
-    error(
+# Error for autojacvec backends reached with a DAE residual but no DAE branch.
+function _dae_vecjacobian!(dλ, y, λ, p, t, S, isautojacvec, dgrad, dy, W, du, ddu)
+    return error(
         "$(nameof(typeof(isautojacvec))) is not currently supported for DAEProblem adjoints. " *
             "Use `ReverseDiffVJP()`, `EnzymeVJP()`, `ZygoteVJP()`, `TrackerVJP()`, or `autojacvec = false`."
     )
@@ -450,8 +448,10 @@ end
 
 function _vecjacobian!(
         dλ, y, λ, p, t, S::TS, isautojacvec::Bool, dgrad, dy,
-        W
+        W, du = nothing, ddu = nothing
     ) where {TS <: SensitivityFunction}
+    du === nothing ||
+        return _dae_vecjacobian!(dλ, y, λ, p, t, S, isautojacvec, dgrad, dy, W, du, ddu)
     (; sensealg, f) = S
     prob = getprob(S)
 
@@ -605,8 +605,10 @@ end
 
 function _vecjacobian!(
         dλ, y, λ, p, t, S::TS, isautojacvec::TrackerVJP, dgrad, dy,
-        W
+        W, du = nothing, ddu = nothing
     ) where {TS <: SensitivityFunction}
+    du === nothing ||
+        return _dae_vecjacobian!(dλ, y, λ, p, t, S, isautojacvec, dgrad, dy, W, du, ddu)
     (; sensealg) = S
     f = unwrapped_f(S.f)
 
@@ -664,8 +666,10 @@ end
 
 function _vecjacobian!(
         dλ, y, λ, p, t, S::TS, isautojacvec::ReverseDiffVJP, dgrad, dy,
-        W
+        W, du = nothing, ddu = nothing
     ) where {TS <: SensitivityFunction}
+    du === nothing ||
+        return _dae_vecjacobian!(dλ, y, λ, p, t, S, isautojacvec, dgrad, dy, W, du, ddu)
     (; sensealg) = S
     prob = getprob(S)
     f = unwrapped_f(S.f)
@@ -815,8 +819,10 @@ end
 
 function _vecjacobian!(
         dλ, y, λ, p, t, S::TS, isautojacvec::ZygoteVJP, dgrad, dy,
-        W
+        W, du = nothing, ddu = nothing
     ) where {TS <: SensitivityFunction}
+    du === nothing ||
+        return _dae_vecjacobian!(dλ, y, λ, p, t, S, isautojacvec, dgrad, dy, W, du, ddu)
     (; sensealg) = S
     prob = getprob(S)
     f = unwrapped_f(S.f)
@@ -997,8 +1003,10 @@ end
 
 function _vecjacobian!(
         dλ, y, λ, p, t, S::TS, isautojacvec::EnzymeVJP, dgrad, dy,
-        W
+        W, du = nothing, ddu = nothing
     ) where {TS <: SensitivityFunction}
+    du === nothing ||
+        return _dae_vecjacobian!(dλ, y, λ, p, t, S, isautojacvec, dgrad, dy, W, du, ddu)
     (; sensealg) = S
     f = unwrapped_f(S.f)
 
@@ -1175,7 +1183,7 @@ end
 # `ddu` receives `(∂F/∂(du))'λ`.
 # ---------------------------------------------------------------------------
 
-function _vecjacobian!(
+function _dae_vecjacobian!(
         dλ, y, λ, p, t, S::TS, isautojacvec::ReverseDiffVJP, dgrad, dy,
         W, du, ddu
     ) where {TS <: SensitivityFunction}
@@ -1234,7 +1242,7 @@ function _vecjacobian!(
     return nothing
 end
 
-function _vecjacobian!(
+function _dae_vecjacobian!(
         dλ, y, λ, p, t, S::TS, isautojacvec::ZygoteVJP, dgrad, dy,
         W, du, ddu
     ) where {TS <: SensitivityFunction}
@@ -1286,7 +1294,7 @@ function _vecjacobian!(
     return nothing
 end
 
-function _vecjacobian!(
+function _dae_vecjacobian!(
         dλ, y, λ, p, t, S::TS, isautojacvec::TrackerVJP, dgrad, dy,
         W, du, ddu
     ) where {TS <: SensitivityFunction}
@@ -1319,7 +1327,7 @@ end
 
 _enzyme_dae_vecjac_dot(f, du, u, p, t, λ) = dot(vec(f(du, u, p, t)), vec(λ))
 
-function _vecjacobian!(
+function _dae_vecjacobian!(
         dλ, y, λ, p, t, S::TS, isautojacvec::EnzymeVJP, dgrad, dy,
         W, du, ddu
     ) where {TS <: SensitivityFunction}
@@ -1410,7 +1418,7 @@ function _vecjacobian!(
     return nothing
 end
 
-function _vecjacobian!(
+function _dae_vecjacobian!(
         dλ, y, λ, p, t, S::TS, isautojacvec::Bool, dgrad, dy,
         W, du, ddu
     ) where {TS <: SensitivityFunction}
@@ -1434,7 +1442,12 @@ function _vecjacobian!(
     return nothing
 end
 
-function _vecjacobian!(dλ, y, λ, p, t, S::SensitivityFunction, ::MooncakeVJP, dgrad, dy, W)
+function _vecjacobian!(
+        dλ, y, λ, p, t, S::SensitivityFunction, isautojacvec::MooncakeVJP, dgrad, dy, W,
+        du = nothing, ddu = nothing
+    )
+    du === nothing ||
+        return _dae_vecjacobian!(dλ, y, λ, p, t, S, isautojacvec, dgrad, dy, W, du, ddu)
     _dy, y_grad, p_grad = mooncake_run_ad(S.diffcache.paramjac_config, y, p, t, λ)
     dy !== nothing && recursive_copyto!(dy, _dy)
     dλ !== nothing && recursive_copyto!(dλ, y_grad)
@@ -1442,7 +1455,12 @@ function _vecjacobian!(dλ, y, λ, p, t, S::SensitivityFunction, ::MooncakeVJP, 
     return
 end
 
-function _vecjacobian!(dλ, y, λ, p, t, S::SensitivityFunction, ::ReactantVJP, dgrad, dy, W)
+function _vecjacobian!(
+        dλ, y, λ, p, t, S::SensitivityFunction, isautojacvec::ReactantVJP, dgrad, dy, W,
+        du = nothing, ddu = nothing
+    )
+    du === nothing ||
+        return _dae_vecjacobian!(dλ, y, λ, p, t, S, isautojacvec, dgrad, dy, W, du, ddu)
     if S isa Union{CallbackSensitivityFunction, CallbackSensitivityFunctionPSwap}
         tprev = S.f.tprev
         reactant_run_cb_ad!(dλ, dgrad, dy, S.diffcache.paramjac_config, y, p, t, tprev, λ)
