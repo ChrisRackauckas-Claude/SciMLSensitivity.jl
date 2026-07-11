@@ -94,12 +94,14 @@ run_qa(
                 :increment_deriv!, :input_hook, :output_hook, :pull_value!, :reverse_pass!,
                 :unseed!, :value, :value!,
                 # SciMLBase
-                :ADOriginator, :AbstractRODEProblem, :AbstractSDDEProblem,
+                :ADOriginator, :AbstractDAESolution, :AbstractRODEProblem,
+                :AbstractSDDEProblem,
                 :AlgorithmInterpretation, :ChainRulesOriginator, :EnzymeOriginator,
                 :FullSpecialize, :ImmutableNonlinearProblem, :MooncakeOriginator,
                 :OVERDETERMINED, :ParamJacobianWrapper, :ReverseDiffOriginator,
                 :TrackerOriginator, :UDerivativeWrapper, :UJacobianWrapper, :Void,
                 :_concrete_solve_adjoint, :_concrete_solve_forward, :alg_interpretation,
+                :enable_interpolation_sensitivitymode,
                 :has_initialization_data, :has_observed, :has_paramjac, :has_vjp_p,
                 :initialization_status, :sensitivity_solution, :specialization,
                 # SciMLStructures
