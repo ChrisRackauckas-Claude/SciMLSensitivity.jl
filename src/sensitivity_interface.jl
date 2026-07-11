@@ -587,21 +587,22 @@ function _adjoint_sensitivities(
     return du0, dp
 end
 
-# The actual implementation lives in the SciMLSensitivitySundialsExt package
-# extension, which adds a more specific method for CVODES-compatible `alg`s.
+# The actual implementations live in the SciMLSensitivitySundialsExt package
+# extension, which adds more specific methods for CVODES/IDAS-compatible `alg`s.
 function _adjoint_sensitivities(sol, sensealg::SundialsAdjoint, alg; kwargs...)
     error(
         """
-        `SundialsAdjoint` uses the SUNDIALS CVODES C adjoint interface and therefore
-        requires a Sundials.jl CVODES-compatible solver. Got `alg = $(nameof(typeof(alg)))`.
+        `SundialsAdjoint` uses the SUNDIALS CVODES/IDAS C adjoint interfaces and
+        therefore requires a Sundials.jl compatible solver. Got `alg = $(nameof(typeof(alg)))`.
 
         To use `SundialsAdjoint`:
 
           1. Load Sundials.jl with `using Sundials` (this activates the
              SciMLSensitivitySundialsExt extension), and
-          2. use `CVODE_BDF()` or `CVODE_Adams()` as the solver, e.g.
+          2. use `CVODE_BDF()` or `CVODE_Adams()` as the solver for `ODEProblem`s,
+             or `IDA()` for `DAEProblem`s, e.g.
              `solve(prob, CVODE_BDF(); sensealg = SundialsAdjoint())` or
-             `adjoint_sensitivities(sol, CVODE_BDF(); sensealg = SundialsAdjoint(), ...)`.
+             `adjoint_sensitivities(sol, IDA(); sensealg = SundialsAdjoint(), ...)`.
 
         For non-Sundials solvers, use a native adjoint method such as `GaussAdjoint`
         or `InterpolatingAdjoint` instead.
