@@ -58,26 +58,35 @@ sumsq_dg(out, u, p, t, i) = (out .= u) # g_i = sum(u.^2)/2 at each data point
     end
     fd_u = ForwardDiff.gradient(Gu, u0[1:2])
 
-    # every DAE-capable adjoint method, with the adjoint solved both in
-    # mass-matrix form (ODE algorithm) and in fully implicit residual form
-    # (DAE algorithm)
-    @testset "sensealg = $(nameof(typeof(sensealg(ReverseDiffVJP()))))" for sensealg in (
-            x -> InterpolatingAdjoint(autojacvec = x),
-            x -> QuadratureAdjoint(autojacvec = x),
-            x -> GaussAdjoint(autojacvec = x),
-            x -> GaussKronrodAdjoint(autojacvec = x),
+    # Both adjoint-problem forms — mass-matrix `ODEProblem` (ODE algorithm) and
+    # fully implicit residual `DAEProblem` (DAE algorithm) — are emitted by the
+    # shared `_dae_adjoint_problem`, so exercising both once (here, through
+    # `InterpolatingAdjoint`) covers the form dispatch; the other methods are then
+    # checked with the mass-matrix form only.
+    for adjalg in (FBDF(), DFBDF())
+        du0g, dpg = adjoint_sensitivities(
+            sol, adjalg; t = ts, dgdu_discrete = sumsq_dg,
+            sensealg = InterpolatingAdjoint(autojacvec = ReverseDiffVJP()),
+            abstol = 1.0e-8, reltol = 1.0e-8
         )
+        @test vec(dpg) ≈ fd_p rtol = 1.0e-4
+        @test du0g[1:2] ≈ fd_u rtol = 1.0e-4
+        @test abs(du0g[3]) < 1.0e-10
+    end
 
-        for adjalg in (FBDF(), DFBDF())
-            du0g, dpg = adjoint_sensitivities(
-                sol, adjalg; t = ts, dgdu_discrete = sumsq_dg,
-                sensealg = sensealg(ReverseDiffVJP()),
-                abstol = 1.0e-8, reltol = 1.0e-8
-            )
-            @test vec(dpg) ≈ fd_p rtol = 1.0e-4
-            @test du0g[1:2] ≈ fd_u rtol = 1.0e-4
-            @test abs(du0g[3]) < 1.0e-10
-        end
+    # every DAE-capable adjoint method (mass-matrix form)
+    @testset "sensealg = $(nameof(typeof(sensealg)))" for sensealg in (
+            QuadratureAdjoint(autojacvec = ReverseDiffVJP()),
+            GaussAdjoint(autojacvec = ReverseDiffVJP()),
+            GaussKronrodAdjoint(autojacvec = ReverseDiffVJP()),
+        )
+        du0g, dpg = adjoint_sensitivities(
+            sol, FBDF(); t = ts, dgdu_discrete = sumsq_dg,
+            sensealg, abstol = 1.0e-8, reltol = 1.0e-8
+        )
+        @test vec(dpg) ≈ fd_p rtol = 1.0e-4
+        @test du0g[1:2] ≈ fd_u rtol = 1.0e-4
+        @test abs(du0g[3]) < 1.0e-10
     end
 
     # EnzymeVJP through the interpolating adjoint
