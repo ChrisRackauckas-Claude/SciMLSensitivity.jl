@@ -1,6 +1,6 @@
 mutable struct GaussIntegrand{
         pType, uType, lType, rateType, S, PF, PJC, PJT, DGP,
-        G, SAlg <: AbstractGAdjoint, tType, rType, UF,
+        G, SAlg <: AbstractGAdjoint, tType, rType, UF, DUT,
     }
     sol::S
     p::pType
@@ -19,6 +19,9 @@ mutable struct GaussIntegrand{
     # out of a FunctionWrappersWrapper is dynamic and would otherwise dominate
     # every `vec_pjac!` call.
     unwrappedf::UF
+    # Derivative interpolation buffer for fully implicit DAE residuals; `nothing`
+    # for ODE problems.
+    dy::DUT
 end
 
 struct ODEGaussAdjointSensitivityFunction{
@@ -541,9 +544,21 @@ function GaussIntegrand(sol, sensealg, checkpoints, dgdp = nothing)
     f_cache = zero(y)
     isautojacvec = get_jacvec(sensealg)
 
-    unwrappedf = unwrapped_f(f)
+    unwrappedf = prob isa SciMLBase.AbstractDAEProblem ? dae_unwrapped_f(f) :
+        unwrapped_f(f)
 
     dgdp_cache = dgdp === nothing ? nothing : mutable_zeros(tunables)
+
+    if prob isa SciMLBase.AbstractDAEProblem
+        dy = zero(y)
+        pf, pJ, paramjac_config = dae_integrand_paramjac_config(
+            sensealg, prob, unwrappedf, y, dy, tunables, repack, tspan[2]
+        )
+        return GaussIntegrand(
+            sol, p, y, λ, pf, f_cache, pJ, paramjac_config,
+            sensealg, dgdp_cache, dgdp, tunables, repack, unwrappedf, dy
+        )
+    end
 
     if sensealg.autojacvec isa ReverseDiffVJP
         tape = if DiffEqBase.isinplace(prob)
@@ -620,7 +635,7 @@ function GaussIntegrand(sol, sensealg, checkpoints, dgdp = nothing)
 
     return GaussIntegrand(
         cpsol, p, y, λ, pf, f_cache, pJ, paramjac_config,
-        sensealg, dgdp_cache, dgdp, tunables, repack, unwrappedf
+        sensealg, dgdp_cache, dgdp, tunables, repack, unwrappedf, nothing
     )
 end
 
@@ -631,6 +646,8 @@ end
 
 # out = λ df(u, p, t)/dp at u=y, p=p, t=t
 function vec_pjac!(out, λ, y, t, S::GaussIntegrand)
+    # Fully implicit DAE residuals take the p-vjp of F(du, u, p, t) instead.
+    S.dy === nothing || return dae_vec_pjac!(out, λ, y, t, S)
     (; pJ, pf, p, f_cache, dgdp_cache, paramjac_config, sensealg, sol, tunables, repack) = S
     _odef = sol.prob.f
     f = S.unwrappedf
@@ -754,7 +771,9 @@ function (S::GaussIntegrand)(out, t, λ)
         y = sol(t)
     end
     vec_pjac!(out, λ, y, t, S)
-    out = recursive_neg!(out)
+    # For the residual convention F(du, u, p, t) = 0 the raw p-vjp +F_p'λ already
+    # carries the sign that the ODE convention obtains from this negation.
+    S.dy === nothing && (out = recursive_neg!(out))
     if S.dgdp !== nothing
         S.dgdp(dgdp_cache, y, p, t)
         out .+= dgdp_cache
@@ -842,11 +861,44 @@ function _adjoint_sensitivities(
             callback, no_start,
             abstol, reltol, kwargs...
         )
+    elseif sol.prob isa SciMLBase.AbstractDAEProblem
+        adj_prob, cb2,
+            rcb = DAEAdjointProblem(
+            sol, sensealg, alg, integrand, cb,
+            t, dgdu_discrete,
+            dgdp_discrete,
+            dgdu_continuous, dgdp_continuous, g, Val(true);
+            checkpoints,
+            callback, no_start,
+            abstol, reltol, kwargs...
+        )
     else
-        error("Continuous adjoint sensitivities are only supported for ODE problems.")
+        error("Continuous adjoint sensitivities are only supported for ODE/DAE problems.")
     end
 
     tstops = ischeckpointing(sensealg, sol) ? checkpoints : similar(current_time(sol), 0)
+
+    if sol.prob isa SciMLBase.AbstractDAEProblem
+        # The DAE adjoint state is z = [w; λ]: the integrating callback must read
+        # the λ block.
+        numstates = length(state_values(sol.prob))
+        _integrand_func = let integrand = integrand, numstates = numstates
+            (out, u, t, integrator) -> integrand(
+                out, t, @view(u[(numstates + 1):(2 * numstates)])
+            )
+        end
+        if sensealg isa GaussAdjoint
+            cb = IntegratingSumCallback(
+                _integrand_func, integrand_values, mutable_zeros(tunables);
+                integrand_inplace = true
+            )
+        elseif sensealg isa GaussKronrodAdjoint
+            cb = IntegratingGKSumCallback(
+                _integrand_func, integrand_values, mutable_zeros(tunables);
+                integrand_inplace = true
+            )
+        end
+    end
 
     adj_sol = solve(
         adj_prob, alg; abstol, reltol, save_everystep = false,
@@ -861,8 +913,8 @@ function _adjoint_sensitivities(
         yy = similar(rcb.y)
         yy .= 0
         for (Δλa, tt) in rcb.Δλas
-            (; algevar_idxs) = rcb.diffcache
-            iλ[algevar_idxs] .= Δλa
+            (; algeeq_idxs) = rcb.diffcache
+            iλ[algeeq_idxs] .= Δλa
             sol(yy, tt)
             vec_pjac!(out, iλ, yy, tt, integrand)
             res .+= out
@@ -870,7 +922,13 @@ function _adjoint_sensitivities(
         end
     end
 
-    return state_values(adj_sol)[end], __maybe_adjoint(res)
+    du0 = if sol.prob isa SciMLBase.AbstractDAEProblem
+        state_values(adj_sol)[end][1:length(state_values(sol.prob))]
+    else
+        state_values(adj_sol)[end]
+    end
+
+    return du0, __maybe_adjoint(res)
 end
 
 __maybe_adjoint(x::AbstractArray) = x'

@@ -40,12 +40,14 @@ run_tests(;
                 @time @safetestset "Enzyme VJP Inactive" include("Core2/enzyme_vjp_inactive.jl")
                 @time @safetestset "Enzyme VJP View ComponentArray" include("Core2/enzyme_view_componentarray.jl")
                 @time @safetestset "Sundials CVODES Adjoint" include("Core2/sundials_adjoint.jl")
+                @time @safetestset "Sundials IDAS DAE Adjoint" include("Core2/sundials_idas_adjoint.jl")
             end
         end,
         "Core3" => function ()
             return @testset "Core 3" begin
                 @time @safetestset "Default DiffEq Alg" include("Core3/default_alg_diff.jl")
                 @time @safetestset "Adjoint Sensitivity" include("Core3/adjoint.jl")
+                @time @safetestset "DAEProblem Adjoint Sensitivity" include("Core3/dae_adjoint.jl")
                 @time @safetestset "automatic sensealg choice" include("Core3/automatic_sensealg_choice.jl")
                 @time @safetestset "GaussAdjoint ZygoteVJP In-Place" include("Core3/gauss_zygote_inplace.jl")
                 @time @safetestset "Adjoint Allocation Regression" include("Core3/allocation_regression.jl")

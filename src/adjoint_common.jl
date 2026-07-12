@@ -10,7 +10,7 @@ end
 struct AdjointDiffCache{
         UF, PF, G, TJ, PJT, uType, JC, GC, PJC, JNC, PJNC, rateType, DG1,
         DG2, DI,
-        AI, FM, tType, rType,
+        AI, FM, tType, rType, AI2, DI2,
     }
     uf::UF
     pf::PF
@@ -32,6 +32,14 @@ struct AdjointDiffCache{
     issemiexplicitdae::Bool
     tunables::tType
     repack::rType
+    # Fully implicit DAE (`DAEProblem`) structure: indices of the algebraic and
+    # differential equations (zero/nonzero rows of ∂F/∂(du)), which for
+    # mass-matrix DAEs coincide with the variable indices, and whether the
+    # system is Hessenberg index-2.
+    algeeq_idxs::AI2
+    diffeq_idxs::DI2
+    isdae::Bool
+    index2::Bool
 end
 
 """
@@ -77,7 +85,18 @@ function adjointdiffcache(
 
     isinplace = DiffEqBase.isinplace(prob)
     isRODE = prob isa RODEProblem
+    isDAE = prob isa SciMLBase.AbstractDAEProblem
     autojacvec = sensealg.autojacvec
+
+    if isDAE && !(
+            autojacvec isa Union{ReverseDiffVJP, ZygoteVJP, EnzymeVJP, TrackerVJP} ||
+                autojacvec isa Bool
+        )
+        error(
+            "$(nameof(typeof(autojacvec))) is not currently supported for DAEProblem adjoints. " *
+                "Use `ReverseDiffVJP()`, `EnzymeVJP()`, `ZygoteVJP()`, `TrackerVJP()`, or `autojacvec = false`."
+        )
+    end
 
     if isRODE
         _W = last(sol.W.W)
@@ -100,45 +119,62 @@ function adjointdiffcache(
 
     _t = tspan[2]
 
-    # Remove any function wrappers: it breaks autodiff
-    unwrappedf = unwrapped_f(f)
+    # Remove any function wrappers: it breaks autodiff. For DAE residuals also
+    # unwrap the DAEFunction itself (see `dae_unwrapped_f`).
+    unwrappedf = isDAE ? dae_unwrapped_f(f) : unwrapped_f(f)
 
     numparams = p === nothing || p === SciMLBase.NullParameters() ? 0 : length(tunables)
     numindvar = isnothing(u0) ? nothing : length(u0)
     isautojacvec = get_jacvec(sensealg)
 
     issemiexplicitdae = false
-    mass_matrix = sol.prob.f.mass_matrix
-    if mass_matrix isa UniformScaling
-        factorized_mass_matrix = mass_matrix'
-    elseif mass_matrix isa Tuple{UniformScaling, UniformScaling}
-        factorized_mass_matrix = (I', I')
-    else
-        mass_matrix = mass_matrix'
-        diffvar_idxs = findall(
-            x -> any(!iszero, @view(mass_matrix[:, x])),
-            axes(mass_matrix, 2)
+    index2 = false
+    if isDAE
+        # Fully implicit DAE residual F(du, u, p, t): classify the algebraic
+        # structure from the Jacobians at the terminal time and
+        # `differential_vars`, since there is no mass matrix to read it from.
+        _dy_terminal = similar(y)
+        sol(_dy_terminal, _t, Val{1})
+        diffvar_idxs, algevar_idxs, diffeq_idxs, algeeq_idxs,
+            index2 = dae_adjoint_structure(
+            unwrappedf, isinplace, _dy_terminal, y, p, _t,
+            prob.differential_vars
         )
-        algevar_idxs = setdiff(eachindex(u0), diffvar_idxs)
-
-        # TODO: operator
-        if VERSION >= v"1.8-"
-            M̃ = @view mass_matrix[diffvar_idxs, diffvar_idxs]
+        factorized_mass_matrix = nothing
+    else
+        mass_matrix = sol.prob.f.mass_matrix
+        if mass_matrix isa UniformScaling
+            factorized_mass_matrix = mass_matrix'
+        elseif mass_matrix isa Tuple{UniformScaling, UniformScaling}
+            factorized_mass_matrix = (I', I')
         else
-            M̃ = mass_matrix[diffvar_idxs, diffvar_idxs]
+            mass_matrix = mass_matrix'
+            diffvar_idxs = findall(
+                x -> any(!iszero, @view(mass_matrix[:, x])),
+                axes(mass_matrix, 2)
+            )
+            algevar_idxs = setdiff(eachindex(u0), diffvar_idxs)
+
+            # TODO: operator
+            M̃ = @view mass_matrix[diffvar_idxs, diffvar_idxs]
+
+            factorized_mass_matrix = lu(M̃, check = false)
+            issuccess(factorized_mass_matrix) ||
+                error("The submatrix corresponding to the differential variables of the mass matrix must be nonsingular!")
+            isempty(algevar_idxs) || (issemiexplicitdae = true)
         end
-
-        factorized_mass_matrix = lu(M̃, check = false)
-        issuccess(factorized_mass_matrix) ||
-            error("The submatrix corresponding to the differential variables of the mass matrix must be nonsingular!")
-        isempty(algevar_idxs) || (issemiexplicitdae = true)
-    end
-    if !issemiexplicitdae
-        diffvar_idxs = isnothing(u0) ? nothing : eachindex(u0)
-        algevar_idxs = 1:0
+        if !issemiexplicitdae
+            diffvar_idxs = isnothing(u0) ? nothing : eachindex(u0)
+            algevar_idxs = 1:0
+        end
+        # For mass-matrix problems, equation i and variable i pair up.
+        algeeq_idxs = algevar_idxs
+        diffeq_idxs = diffvar_idxs
     end
 
-    if !needs_jac && !issemiexplicitdae && !(autojacvec isa Bool)
+    if !needs_jac && !issemiexplicitdae && (!(autojacvec isa Bool) || isDAE)
+        # The implicit-DAE paths compute their Jacobians on the fly from the
+        # residual, so no dense J buffer is needed even for `autojacvec = false`.
         J = nothing
     else
         if alg === nothing || SciMLBase.forwarddiffs_model_time(alg)
@@ -236,6 +272,10 @@ function adjointdiffcache(
                 (!SciMLBase.is_diagonal_noise(prob) || isnoisemixing(sensealg))
             tape = nothing
             paramjac_config = tape
+        elseif isDAE
+            paramjac_config = get_dae_paramjac_config(
+                autojacvec, p, unwrappedf, y, _dy_terminal, _p, _t; isinplace
+            )
         else
             paramjac_config = get_paramjac_config(
                 autojacvec, p, unwrappedf, y, _p, _t;
@@ -247,6 +287,15 @@ function adjointdiffcache(
     elseif autojacvec isa EnzymeVJP
         paramjac_config = get_paramjac_config(autojacvec, p, f, y, _p, _t; numindvar, alg)
         pf = get_pf(autojacvec; _f = unwrappedf, isinplace, isRODE)
+        if isDAE
+            # The residual takes `du` as an extra differentiated argument; append
+            # its primal and shadow buffers to the standard Enzyme config.
+            paramjac_config = if paramjac_config[1] isa LazyBufferCache
+                (paramjac_config..., LazyBufferCache(), LazyBufferCache())
+            else
+                (paramjac_config..., zero(y), zero(y))
+            end
+        end
         _needs_shadow = !(p isa SciMLBase.NullParameters) &&
             isscimlstructure(p) && !(p isa AbstractArray)
         _shadow_p = if _needs_shadow
@@ -299,7 +348,7 @@ function adjointdiffcache(
             numindvar = numindvar, alg = alg
         )
     elseif SciMLBase.has_paramjac(f) || quad || !(autojacvec isa Bool) ||
-            autojacvec isa EnzymeVJP
+            autojacvec isa EnzymeVJP || isDAE
         paramjac_config = nothing
         pf = nothing
     else
@@ -328,7 +377,7 @@ function adjointdiffcache(
         end
     end
 
-    pJ = if (quad || !(autojacvec isa Bool))
+    pJ = if (quad || !(autojacvec isa Bool) || isDAE)
         nothing
     else
         if !isnothing(u0)
@@ -462,10 +511,45 @@ function adjointdiffcache(
         jac_noise_config, paramjac_noise_config,
         f_cache, dgdu, dgdp, diffvar_idxs, algevar_idxs,
         factorized_mass_matrix, issemiexplicitdae,
-        tunables, repack
+        tunables, repack,
+        algeeq_idxs, diffeq_idxs, isDAE, index2
     )
 
     return adjoint_cache, y
+end
+
+# ReverseDiff tape for the fully implicit DAE residual F(du, u, p, t), taped over
+# all four arguments so a single reverse pass yields the vjps with respect to
+# `du`, `u`, and `p`.
+function get_dae_paramjac_config(
+        autojacvec::ReverseDiffVJP, p, f, y, dy, _p, _t;
+        isinplace = true
+    )
+    if p === nothing || p isa SciMLBase.NullParameters
+        tunables, repack = p, identity
+    elseif isscimlstructure(p)
+        tunables, repack, _ = canonicalize(Tunable(), p)
+    else
+        tunables, repack = p, identity
+    end
+    tape = if isinplace
+        ReverseDiff.GradientTape((dy, y, _p, [_t])) do du, u, p, t
+            res = (p !== nothing && p !== SciMLBase.NullParameters()) ?
+                similar(p, size(u)) : similar(u)
+            res .= false
+            f(res, du, u, repack(p), first(t))
+            return vec(res)
+        end
+    else
+        ReverseDiff.GradientTape((dy, y, _p, [_t])) do du, u, p, t
+            vec(f(du, u, repack(p), first(t)))
+        end
+    end
+    if compile_tape(autojacvec)
+        return ReverseDiff.compile(tape)
+    else
+        return tape
+    end
 end
 
 function get_paramjac_config(
@@ -757,17 +841,19 @@ function ReverseLossCallback(sensefun, λ, t, dgdu, dgdp, cur_time, no_start)
     (; sensealg, y) = sensefun
     isq = (sensealg isa QuadratureAdjoint) || (sensealg isa AbstractGAdjoint)
 
-    (; factorized_mass_matrix) = sensefun.diffcache
+    (; factorized_mass_matrix, isdae) = sensefun.diffcache
     prob = getprob(sensefun)
     idx = length(state_values(prob))
     Δλas = Tuple{typeof(λ), eltype(t)}[]
-    if ArrayInterface.ismutable(y)
+    if ArrayInterface.ismutable(y) && !isdae
         return ReverseLossCallback(
             isq, λ, t, y, cur_time, idx, factorized_mass_matrix,
             sensealg, dgdu, dgdp, sensefun.diffcache, sensefun.f,
             nothing, Δλas, no_start
         )
     else
+        # The DAE jump corrections interpolate the forward solution (and its
+        # derivative) at the jump time, so keep `sol` around.
         return ReverseLossCallback(
             isq, λ, t, y, cur_time, idx, factorized_mass_matrix,
             sensealg, dgdu, dgdp, sensefun.diffcache, sensefun.f,
@@ -781,26 +867,34 @@ function (f::ReverseLossCallback)(integrator)
     (;
         diffvar_idxs, algevar_idxs, issemiexplicitdae,
         J, uf, f_cache, jac_config,
+        algeeq_idxs, diffeq_idxs, isdae, index2,
     ) = f.diffcache
 
     no_start && !(sensealg isa BacksolveAdjoint) && cur_time[] == 1 && return nothing
 
     p, u = integrator.p, integrator.u
+    ti = t[cur_time[]]
 
     if sensealg isa BacksolveAdjoint
         copyto!(y, integrator.u[(end - idx + 1):end])
     end
 
+    # For implicit DAEs the shared `y` buffer holds the last rhs evaluation
+    # point, so interpolate the forward solution at the jump time instead.
+    isdae && sol(y, ti)
+
     if ArrayInterface.ismutable(u)
         # Warning: alias here! Be careful with λ
         gᵤ = isq ? λ : @view(λ[1:idx])
         if dgdu !== nothing
-            dgdu(gᵤ, y, p, t[cur_time[]], cur_time[])
-            # add discrete dgdp contribution
+            dgdu(gᵤ, y, p, ti, cur_time[])
+            # add discrete dgdp contribution; for the DAE adjoint the parameter
+            # gradient block sits behind both the w and λ blocks
             if dgdp !== nothing && !isq
+                poff = isdae ? 2 * idx : idx
                 gp = @view(λ[(idx + 1):end])
-                dgdp(gp, y, p, t[cur_time[]], cur_time[])
-                u[(idx + 1):length(λ)] .+= gp
+                dgdp(gp, y, p, ti, cur_time[])
+                u[(poff + 1):(poff + length(gp))] .+= gp
             end
         end
     else
@@ -808,26 +902,45 @@ function (f::ReverseLossCallback)(integrator)
         # exactly λ with no parameter-gradient augmentation.
         @assert isq
         outtype = ArrayInterface.parameterless_type(λ)
-        y = sol(t[cur_time[]])
-        gᵤ = dgdu(y, p, t[cur_time[]], cur_time[]; outtype)
+        y = sol(ti)
+        gᵤ = dgdu(y, p, ti, cur_time[]; outtype)
     end
 
-    if issemiexplicitdae
-        if J isa DiffCache
-            J = get_tmp(J, y)
-        end
-        if SciMLBase.has_jac(f.f)
-            f.f.jac(J, y, p, t[cur_time[]])
+    if issemiexplicitdae || (isdae && !isempty(algevar_idxs))
+        if isdae
+            # ∂F/∂u of the residual at the interpolated (du, u); the shared
+            # Jacobian machinery is bypassed since the residual signature differs.
+            dy = sol(ti, Val{1})
+            residual = unwrapped_f(f.f)
+            J_u = dae_u_jacobian(residual, DiffEqBase.isinplace(sol.prob), dy, y, p, ti)
         else
-            jacobian!(J, uf, y, f_cache, sensealg, jac_config)
+            if J isa DiffCache
+                J = get_tmp(J, y)
+            end
+            if SciMLBase.has_jac(f.f)
+                f.f.jac(J, y, p, ti)
+            else
+                jacobian!(J, uf, y, f_cache, sensealg, jac_config)
+            end
+            J_u = J
         end
-        dhdd = J[algevar_idxs, diffvar_idxs]
-        dhda = J[algevar_idxs, algevar_idxs]
-        Δλa = -(dhda' \ gᵤ[algevar_idxs])
+        dhdd = J_u[algeeq_idxs, diffvar_idxs]
+        if isdae && index2
+            all(iszero, @view(gᵤ[algevar_idxs])) ||
+                error("Discrete cost contributions on the algebraic variables of an index-2 DAE are not supported: they correspond to derivatives of delta distributions in the adjoint. Reformulate the cost in terms of the differential variables.")
+            dy = sol(ti, Val{1})
+            residual = unwrapped_f(f.f)
+            J_du = dae_du_jacobian(residual, DiffEqBase.isinplace(sol.prob), dy, y, p, ti)
+            N = (lu(J_du[diffeq_idxs, diffvar_idxs]) \ J_u[diffeq_idxs, algevar_idxs])'
+            Δλa = -((N * dhdd') \ (N * gᵤ[diffvar_idxs]))
+        else
+            dhda = J_u[algeeq_idxs, algevar_idxs]
+            Δλa = -(dhda' \ gᵤ[algevar_idxs])
+        end
         Δλd = dhdd'Δλa + gᵤ[diffvar_idxs]
-        push!(f.Δλas, (Δλa, t[cur_time[]]))
+        push!(f.Δλas, (Δλa, ti))
     else
-        Δλd = gᵤ
+        Δλd = isdae ? gᵤ[diffvar_idxs] : gᵤ
     end
 
     if F !== nothing

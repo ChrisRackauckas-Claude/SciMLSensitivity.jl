@@ -7,6 +7,7 @@ adjoint_sensitivities
 ODEAdjointProblem
 SDEAdjointProblem
 RODEAdjointProblem
+DAEAdjointProblem
 AdjointSensitivityIntegrand
 SensitivityFunction
 StochasticTransformedFunction

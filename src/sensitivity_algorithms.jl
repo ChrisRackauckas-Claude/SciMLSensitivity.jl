@@ -362,8 +362,10 @@ The total compute cost is no more than double the original forward compute cost.
 
 ## SciMLProblem Support
 
-This `sensealg` only supports `ODEProblem`s, `SDEProblem`s, and `RODEProblem`s. This `sensealg`
-supports callbacks (events).
+This `sensealg` supports `ODEProblem`s, `SDEProblem`s, `RODEProblem`s, and fully implicit
+`DAEProblem`s (index-1 and Hessenberg index-2, without checkpointing; see
+[`DAEAdjointProblem`](@ref)). This `sensealg` supports callbacks (events) for
+`ODEProblem`s, `SDEProblem`s, and `RODEProblem`s.
 
 ### Disclaimer for `SDEProblem`s
 
@@ -384,6 +386,10 @@ Rackauckas, C. and Ma, Y. and Dixit, V. and Guo, X. and Innes, M. and Revels, J.
 and Nyberg, J. and Ivaturi, V., A comparison of automatic differentiation and
 continuous sensitivity analysis for derivatives of differential equation solutions,
 arXiv:1812.01892
+
+Cao, Y. and Li, S. and Petzold, L. and Serban, R., Adjoint sensitivity analysis
+for differential-algebraic equations: The adjoint DAE system and its numerical
+solution, SIAM journal on scientific computing 24 pp: 1076-1089 (2003)
 """
 struct InterpolatingAdjoint{CS, AD, FDT, VJP} <:
     AbstractAdjointSensitivityAlgorithm{CS, AD, FDT}
@@ -472,7 +478,10 @@ documentation page or the docstrings of the vjp types.
 
 ## SciMLProblem Support
 
-This `sensealg` only supports `ODEProblem`s. This `sensealg` supports events (callbacks).
+This `sensealg` supports `ODEProblem`s and fully implicit index-1 `DAEProblem`s
+(without callbacks; Hessenberg index-2 DAEs are rejected — use
+`InterpolatingAdjoint` for those; see [`DAEAdjointProblem`](@ref)). This
+`sensealg` supports events (callbacks) for `ODEProblem`s.
 
 ## References
 
@@ -577,7 +586,10 @@ documentation page or the docstrings of the vjp types.
 
 ## SciMLProblem Support
 
-This `sensealg` only supports `ODEProblem`s. This `sensealg` supports events (callbacks).
+This `sensealg` supports `ODEProblem`s and fully implicit index-1 `DAEProblem`s
+(without callbacks; Hessenberg index-2 DAEs are rejected — use
+`InterpolatingAdjoint` for those; see [`DAEAdjointProblem`](@ref)). This
+`sensealg` supports events (callbacks) for `ODEProblem`s.
 
 ## References
 
@@ -675,7 +687,10 @@ documentation page or the docstrings of the vjp types.
 
 ## SciMLProblem Support
 
-This `sensealg` only supports `ODEProblem`s. This `sensealg` supports events (callbacks).
+This `sensealg` supports `ODEProblem`s and fully implicit index-1 `DAEProblem`s
+(without callbacks; Hessenberg index-2 DAEs are rejected — use
+`InterpolatingAdjoint` for those; see [`DAEAdjointProblem`](@ref)). This
+`sensealg` supports events (callbacks) for `ODEProblem`s.
 
 ## References
 
@@ -727,17 +742,20 @@ SundialsAdjoint{CS, AD, FDT, VJP} <: AbstractAdjointSensitivityAlgorithm{CS, AD,
 ```
 
 An implementation of adjoint sensitivity analysis which uses the SUNDIALS CVODES
-C adjoint interface (`CVodeAdjInit`/`CVodeF`/`CVodeB`). The forward pass is
-re-integrated by CVODES with checkpointing, the backward (adjoint) pass is
-integrated by CVODES with its checkpoint-based interpolation of the forward
-solution, and the parameter gradient is accumulated by the CVODES backward
-quadrature integration. Vector-Jacobian products inside the backward pass are
-computed with the standard SciMLSensitivity `autojacvec` machinery.
+and IDAS C adjoint interfaces (`CVodeAdjInit`/`CVodeF`/`CVodeB` for
+`ODEProblem`s, `IDAAdjInit`/`IDASolveF`/`IDASolveB` for `DAEProblem`s). The
+forward pass is re-integrated by SUNDIALS with checkpointing, the backward
+(adjoint) pass is integrated by SUNDIALS with its checkpoint-based interpolation
+of the forward solution, and the parameter gradient is accumulated by the
+SUNDIALS backward quadrature integration. Vector-Jacobian products inside the
+backward pass are computed with the standard SciMLSensitivity `autojacvec`
+machinery (`ReverseDiffVJP` only for `DAEProblem`s).
 
-This method requires `using Sundials` and a Sundials.jl CVODES-compatible
-solver, i.e. `CVODE_BDF` or `CVODE_Adams`, both for the forward `solve` and as
-the `alg` argument of `adjoint_sensitivities`. Using any other solver throws an
-error.
+This method requires `using Sundials` and a Sundials.jl adjoint-compatible
+solver — `CVODE_BDF` or `CVODE_Adams` for `ODEProblem`s and `IDA` for
+`DAEProblem`s — both for the forward `solve` and as the `alg` argument of
+`adjoint_sensitivities`. Using any other solver (or mismatching problem and
+solver types) throws an error.
 
 ## Constructor
 
@@ -784,13 +802,37 @@ SundialsAdjoint(; chunk_size = 0, autodiff = true,
 
 ## SciMLProblem Support
 
-This `sensealg` only supports in-place `ODEProblem`s without callbacks (events).
-Discrete cost functionals (`t` with `dgdu_discrete`, which is what reverse-mode
-AD of `solve` uses) and continuous cost functionals (`dgdu_continuous`/
-`dgdp_continuous` or a scalar `g(u, p, t)`) are supported, including both at
-once; the continuous contributions are integrated by CVODES itself as part of
-the backward pass. The state and time types must be `Float64` (a SUNDIALS
-requirement), and mass matrices are not supported.
+This `sensealg` supports in-place `ODEProblem`s and in-place fully implicit
+`DAEProblem`s, both without callbacks (events). The state and time types must
+be `Float64` (a SUNDIALS requirement).
+
+For `ODEProblem`s (with `CVODE_BDF`/`CVODE_Adams`): discrete cost functionals
+(`t` with `dgdu_discrete`, which is what reverse-mode AD of `solve` uses) and
+continuous cost functionals (`dgdu_continuous`/`dgdp_continuous` or a scalar
+`g(u, p, t)`) are supported, including both at once; the continuous
+contributions are integrated by CVODES itself as part of the backward pass.
+Mass matrices are not supported (a CVODES restriction) — write the system as a
+`DAEProblem` instead.
+
+For `DAEProblem`s (with `IDA`): the residual `F(du, u, p, t)` **must be linear
+in `du` with a constant (state- and time-independent) Jacobian `∂F/∂du`**, i.e.
+`F = M du - h(u, p, t)` with a constant mass matrix `M` — this covers
+mass-matrix-style and semi-explicit index-1 DAEs written implicitly. The
+backward residual omits the `d/dt (∂F/∂du)ᵀ λ` term, which only vanishes under
+this assumption (a best-effort runtime check errors when a state/time-dependent
+`∂F/∂du` is detected). Discrete cost gradients may have nonzero components with
+respect to algebraic variables: the jumps are transferred onto the adjoint with
+the index-1 consistency correction shared with the native DAEProblem adjoint
+machinery. Hessenberg index-2 DAEs are rejected on this route (use the native
+`InterpolatingAdjoint` DAE support instead). Additional current restrictions:
+only discrete cost functionals (`t` with `dgdu_discrete`/`dgdp_discrete`) are
+supported, `differential_vars` must be specified (used for consistent
+initialization of the backward problem via `IDACalcICB`), and only
+`autojacvec = ReverseDiffVJP()` is available. The returned `du0` is the adjoint
+boundary term `(∂F/∂du)ᵀ λ |_{t0}` (plus corrected cost jumps at `t0`), i.e. the
+gradient with respect to the differential components of `u0` (algebraic
+components of `u0` are determined by consistency, and their entries are zero for
+semi-explicit systems).
 
 ## References
 
@@ -801,6 +843,10 @@ Software (TOMS), 31, pp:363–396 (2005)
 
 Serban, R. and Hindmarsh, A. C., CVODES: The Sensitivity-Enabled ODE Solver in
 SUNDIALS, Proceedings of IDETC/CIE (2005)
+
+Cao, Y. and Li, S. and Petzold, L. and Serban, R., Adjoint Sensitivity Analysis
+for Differential-Algebraic Equations: The Adjoint DAE System and Its Numerical
+Solution, SIAM Journal on Scientific Computing, 24, pp:1076-1089 (2003)
 """
 struct SundialsAdjoint{CS, AD, FDT, VJP} <:
     AbstractAdjointSensitivityAlgorithm{CS, AD, FDT}

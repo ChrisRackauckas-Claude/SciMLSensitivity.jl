@@ -107,6 +107,19 @@ which are then applied to the corresponding ``\lambda^\star`` and ``\frac{dG}{dp
 
 For more information, see [Sensitivity Math Details](@ref sensitivity_math).
 
+!!! note
+
+    Fully implicit DAEs (`DAEProblem`, `F(du, u, p, t) = 0`) are supported with
+    `InterpolatingAdjoint`, `QuadratureAdjoint`, and `GaussAdjoint`/
+    `GaussKronrodAdjoint` (all without checkpointing) for index-1 DAEs, and with
+    `InterpolatingAdjoint` for Hessenberg index-2 DAEs, as well as through
+    `SundialsAdjoint` with `IDA` for du-linear index-1 DAEs. The adjoint is
+    formulated with the augmented adjoint DAE of Cao, Li, Petzold & Serban (2003);
+    see [`DAEAdjointProblem`](@ref) for the supported structure and requirements.
+    If `alg` is a DAE solver (e.g. `DFBDF`), the adjoint is solved in fully
+    implicit form with it; if it is a mass-matrix-capable ODE solver (e.g. `FBDF`,
+    `Rodas5P`), the adjoint is solved in mass-matrix form.
+
 ## Positional Arguments
 
 - `sol`: the solution from the forward pass of the ODE. Note that if not using a checkpointing
@@ -471,8 +484,18 @@ function _adjoint_sensitivities(
             abstol, reltol,
             corfunc_analytical
         )
+    elseif sol.prob isa SciMLBase.AbstractDAEProblem
+        adj_prob,
+            rcb = DAEAdjointProblem(
+            sol, sensealg, alg, t, dgdu_discrete,
+            dgdp_discrete,
+            dgdu_continuous, dgdp_continuous, g, Val(true);
+            checkpoints,
+            callback, no_start,
+            abstol, reltol, kwargs...
+        )
     else
-        error("Continuous adjoint sensitivities are only supported for ODE/SDE/RODE problems.")
+        error("Continuous adjoint sensitivities are only supported for ODE/SDE/RODE/DAE problems.")
     end
 
     # The reverse adjoint must step on the forward grid. Checkpointing already
@@ -497,6 +520,47 @@ function _adjoint_sensitivities(
     end
     prob = sol.prob
     l = mtkp === nothing || mtkp === SciMLBase.NullParameters() ? 0 : length(tunables)
+
+    if sol.prob isa SciMLBase.AbstractDAEProblem
+        # The augmented adjoint state is z = [w; λ; grad]: dG/du0 is w(t0) and the
+        # parameter gradient block sits behind both w and λ.
+        numstates = length(state_values(prob))
+        zend = state_values(adj_sol)[end]
+        du0 = zend[1:numstates]
+
+        if mtkp === nothing || mtkp === SciMLBase.NullParameters()
+            dp = nothing
+        elseif eltype(mtkp) <: real(eltype(zend))
+            dp = real.(zend[(1:l) .+ 2 * numstates])'
+        else
+            dp = zend[(1:l) .+ 2 * numstates]'
+        end
+
+        if rcb !== nothing && !isempty(rcb.Δλas) && dp !== nothing
+            S = adj_prob.f.f
+            S isa DAEAdjointResidual && (S = S.S)
+            (; algeeq_idxs) = rcb.diffcache
+            iλ = similar(rcb.λ, numstates)
+            out = zero(dp')
+            yy = similar(rcb.y)
+            dyy = similar(rcb.y)
+            vjp_du_scratch = similar(rcb.y)
+            vjp_u_scratch = similar(rcb.y)
+            for (Δλa, tt) in rcb.Δλas
+                iλ .= zero(eltype(iλ))
+                iλ[algeeq_idxs] .= Δλa
+                sol(yy, tt)
+                sol(dyy, tt, Val{1})
+                vecjacobian!(
+                    vjp_u_scratch, yy, iλ, mtkp, tt, S;
+                    dgrad = vec(out), du = dyy, ddu = vjp_du_scratch
+                )
+                dp .+= out'
+            end
+        end
+        return du0, dp
+    end
+
     du0 = state_values(adj_sol)[end][1:length(state_values(prob))]
 
     if eltype(mtkp) <: real(eltype(state_values(adj_sol)[end]))
@@ -525,21 +589,22 @@ function _adjoint_sensitivities(
     return du0, dp
 end
 
-# The actual implementation lives in the SciMLSensitivitySundialsExt package
-# extension, which adds a more specific method for CVODES-compatible `alg`s.
+# The actual implementations live in the SciMLSensitivitySundialsExt package
+# extension, which adds more specific methods for CVODES/IDAS-compatible `alg`s.
 function _adjoint_sensitivities(sol, sensealg::SundialsAdjoint, alg; kwargs...)
     error(
         """
-        `SundialsAdjoint` uses the SUNDIALS CVODES C adjoint interface and therefore
-        requires a Sundials.jl CVODES-compatible solver. Got `alg = $(nameof(typeof(alg)))`.
+        `SundialsAdjoint` uses the SUNDIALS CVODES/IDAS C adjoint interfaces and
+        therefore requires a Sundials.jl compatible solver. Got `alg = $(nameof(typeof(alg)))`.
 
         To use `SundialsAdjoint`:
 
           1. Load Sundials.jl with `using Sundials` (this activates the
              SciMLSensitivitySundialsExt extension), and
-          2. use `CVODE_BDF()` or `CVODE_Adams()` as the solver, e.g.
+          2. use `CVODE_BDF()` or `CVODE_Adams()` as the solver for `ODEProblem`s,
+             or `IDA()` for `DAEProblem`s, e.g.
              `solve(prob, CVODE_BDF(); sensealg = SundialsAdjoint())` or
-             `adjoint_sensitivities(sol, CVODE_BDF(); sensealg = SundialsAdjoint(), ...)`.
+             `adjoint_sensitivities(sol, IDA(); sensealg = SundialsAdjoint(), ...)`.
 
         For non-Sundials solvers, use a native adjoint method such as `GaussAdjoint`
         or `InterpolatingAdjoint` instead.

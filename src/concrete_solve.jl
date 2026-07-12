@@ -37,6 +37,10 @@ function _enzyme_vjp_probe(f, repack, out, u, _p, t)
 end
 
 function inplace_vjp(prob, u0, p, verbose, repack)
+    # The probes below call `f(du, u, p, t)` and thus cannot handle DAE
+    # residuals `f(res, du, u, p, t)`; the DAE residual vjp machinery
+    # (the SundialsAdjoint/IDA path) is ReverseDiff-tape based.
+    prob isa SciMLBase.AbstractDAEProblem && return ReverseDiffVJP()
     du = zero(u0)
     # Get verbosity for sensitivity VJP choice warnings
     _verbose = _get_sensitivity_vjp_verbose(verbose)
@@ -126,6 +130,63 @@ function inplace_vjp(prob, u0, p, verbose, repack)
                 du1 .= 0
                 f(du1, u, repack(p), first(t))
                 return vec(du1)
+            end
+        end
+        ReverseDiffVJP(compile)
+    catch e
+        if _verbose
+            @warn "Potential performance improvement omitted. ReverseDiffVJP tried and failed in the automated AD choice algorithm. To show the stack trace, set SciMLSensitivity.STACKTRACE_WITH_VJPWARN[] = true. To turn off this printing, add `verbose = false` to the `solve` call.\n"
+            STACKTRACE_WITH_VJPWARN[] && showerror(stderr, e)
+            println()
+            have_not_warned_vjp[] = false
+        end
+        false
+    end
+
+    return vjp
+end
+
+# SciMLBase.sensitivity_solution has no DAESolution method; mirror its
+# ODESolution body here until that method exists upstream. Note the `du` and `k`
+# fields of the trimmed solution are left untouched, like `k` in the ODE version.
+function _sensitivity_solution(sol::SciMLBase.AbstractDAESolution, u, t)
+    interp = SciMLBase.enable_interpolation_sensitivitymode(sol.interp)
+    @reset sol.u = u
+    @reset sol.t = t isa Vector ? t : collect(t)
+    @reset sol.interp = interp
+    return sol
+end
+_sensitivity_solution(sol, u, t) = SciMLBase.sensitivity_solution(sol, u, t)
+
+# The DAE residual signature f(res, du, u, p, t) needs its own probe; only the
+# ReverseDiff tape and numerical fallbacks are supported by the DAE adjoint.
+function inplace_vjp(prob::SciMLBase.AbstractDAEProblem, u0, p, verbose, repack)
+    _verbose = _get_sensitivity_vjp_verbose(verbose)
+    du0 = prob.du0
+    t0 = prob.tspan[1]
+
+    compile = try
+        f = unwrapped_f(prob.f)
+        !hasbranching(f, copy(u0), copy(du0), u0, repack(p), t0)
+    catch
+        false
+    end
+
+    vjp = try
+        f = unwrapped_f(prob.f)
+        if p === nothing || p isa SciMLBase.NullParameters
+            ReverseDiff.GradientTape((copy(du0), copy(u0), [t0])) do du, u, t
+                res = similar(u, size(u))
+                res .= 0
+                f(res, du, u, p, first(t))
+                return vec(res)
+            end
+        else
+            ReverseDiff.GradientTape((copy(du0), copy(u0), p, [t0])) do du, u, p, t
+                res = similar(u, size(u))
+                res .= 0
+                f(res, du, u, repack(p), first(t))
+                return vec(res)
             end
         end
         ReverseDiffVJP(compile)
@@ -523,8 +584,10 @@ end
 function SciMLBase._concrete_solve_adjoint(
         prob::Union{
             SciMLBase.AbstractODEProblem,
+            SciMLBase.AbstractDAEProblem,
             SciMLBase.AbstractSDEProblem,
             SciMLBase.AbstractRODEProblem,
+            SciMLBase.AbstractDAEProblem,
         },
         alg,
         sensealg::Union{
@@ -715,7 +778,7 @@ function SciMLBase._concrete_solve_adjoint(
         # Saving behavior unchanged
         ts = current_time(sol)
         only_end = length(ts) == 1 && ts[1] == _prob.tspan[2]
-        out = SciMLBase.sensitivity_solution(sol, state_values(sol), ts)
+        out = _sensitivity_solution(sol, state_values(sol), ts)
     elseif saveat isa Number
         if _prob.tspan[2] > _prob.tspan[1]
             ts = _prob.tspan[1]:convert(typeof(_prob.tspan[2]), abs(saveat)):_prob.tspan[2]
@@ -732,10 +795,10 @@ function SciMLBase._concrete_solve_adjoint(
         end
 
         out = if save_idxs === nothing
-            out = SciMLBase.sensitivity_solution(sol, state_values(_out), ts)
+            out = _sensitivity_solution(sol, state_values(_out), ts)
         else
             _outf = getu(_out, save_idxs)
-            out = SciMLBase.sensitivity_solution(sol, _outf(_out), ts)
+            out = _sensitivity_solution(sol, _outf(_out), ts)
         end
         only_end = length(ts) == 1 && ts[1] == _prob.tspan[2]
     elseif isempty(saveat)
@@ -748,7 +811,7 @@ function SciMLBase._concrete_solve_adjoint(
         _u = sol.u[sol_idxs]
         u = save_idxs === nothing ? _u : [x[save_idxs] for x in _u]
         ts = current_time(sol, sol_idxs)
-        out = SciMLBase.sensitivity_solution(sol, u, ts)
+        out = _sensitivity_solution(sol, u, ts)
     else
         _saveat = saveat isa Array ? sort(saveat) : saveat # for minibatching
         if cb === nothing
@@ -762,10 +825,10 @@ function SciMLBase._concrete_solve_adjoint(
         end
 
         out = if save_idxs === nothing
-            out = SciMLBase.sensitivity_solution(sol, state_values(_out), ts)
+            out = _sensitivity_solution(sol, state_values(_out), ts)
         else
             _outf = getu(_out, save_idxs)
-            out = SciMLBase.sensitivity_solution(sol, _outf(_out), ts)
+            out = _sensitivity_solution(sol, _outf(_out), ts)
         end
         only_end = length(ts) == 1 && ts[1] == _prob.tspan[2]
     end
@@ -953,7 +1016,20 @@ function SciMLBase._concrete_solve_adjoint(
             cb2 = cb
         end
 
-        if prob isa Union{ODEProblem, DAEProblem}
+        if prob isa DAEProblem
+            # The adjoint problem's own kwargs carry the correct `initializealg`
+            # for its index (Brown for index-1, NoInit for index-2), so don't
+            # override it here.
+            du0,
+                dp = adjoint_sensitivities(
+                sol, alg, args...; t = ts,
+                dgdu_discrete = ArrayInterface.ismutable(eltype(state_values(sol))) ?
+                    df_iip : df_oop,
+                sensealg,
+                callback = cb2, no_start = !save_start && _prob.tspan[1] ∈ ts,
+                kwargs_init...
+            )
+        elseif prob isa ODEProblem
             du0,
                 dp = adjoint_sensitivities(
                 sol, alg, args...; t = ts,

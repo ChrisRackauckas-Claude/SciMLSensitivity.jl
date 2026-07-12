@@ -35,7 +35,7 @@ using SciMLBase: SciMLBase, AbstractOverloadingSensitivityAlgorithm,
     AbstractNonlinearProblem, AbstractSensitivityAlgorithm,
     AbstractDiffEqFunction, AbstractODEFunction, unwrapped_f, CallbackSet,
     ContinuousCallback, AbstractTimeseriesSolution, NonlinearFunction, NonlinearProblem,
-    DiscreteCallback, LinearProblem, ODEFunction, ODEProblem, DAEProblem,
+    DiscreteCallback, LinearProblem, ODEFunction, ODEProblem, DAEFunction, DAEProblem,
     RODEFunction, RODEProblem, ReturnCode, SDEFunction,
     SDEProblem, VectorContinuousCallback, deleteat!,
     get_tmp_cache, has_adjoint, isinplace, reinit!, remake,
@@ -166,6 +166,7 @@ include("backsolve_adjoint.jl")
 include("interpolating_adjoint.jl")
 include("quadrature_adjoint.jl")
 include("gauss_adjoint.jl")
+include("dae_adjoint.jl")
 include("callback_tracking.jl")
 include("concrete_solve.jl")
 include("second_order.jl")
@@ -177,7 +178,7 @@ export extract_local_sensitivities
 
 export ODEForwardSensitivityFunction, ODEForwardSensitivityProblem, SensitivityFunction,
     ODEAdjointProblem, AdjointSensitivityIntegrand,
-    SDEAdjointProblem, RODEAdjointProblem, SensitivityAlg,
+    SDEAdjointProblem, RODEAdjointProblem, DAEAdjointProblem, SensitivityAlg,
     adjoint_sensitivities,
     ForwardLSSProblem, AdjointLSSProblem,
     NILSSProblem, NILSASProblem,

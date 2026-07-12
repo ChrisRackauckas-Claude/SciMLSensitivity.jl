@@ -604,7 +604,8 @@ function get_cb_diffcaches(
                         nothing, nothing, nothing, w_paramjac,
                         nothing, nothing, nothing, nothing, nothing,
                         nothing, nothing, nothing, false,
-                        nothing, identity
+                        nothing, identity,
+                        nothing, nothing, false, false
                     )
 
                     wp_paramjac = get_cb_paramjac_config(
@@ -616,7 +617,8 @@ function get_cb_diffcaches(
                         nothing, nothing, nothing, wp_paramjac,
                         nothing, nothing, nothing, nothing, nothing,
                         nothing, nothing, nothing, false,
-                        nothing, identity
+                        nothing, identity,
+                        nothing, nothing, false, false
                     )
                 elseif autojacvec isa MooncakeVJP
                     # MooncakeVJP: build Mooncake pullback caches for the
@@ -639,7 +641,8 @@ function get_cb_diffcaches(
                         nothing, nothing, nothing, w_paramjac,
                         nothing, nothing, nothing, nothing, nothing,
                         nothing, nothing, nothing, false,
-                        nothing, identity
+                        nothing, identity,
+                        nothing, nothing, false, false
                     )
 
                     wp_paramjac = get_cb_paramjac_config(
@@ -651,7 +654,8 @@ function get_cb_diffcaches(
                         nothing, nothing, nothing, wp_paramjac,
                         nothing, nothing, nothing, nothing, nothing,
                         nothing, nothing, nothing, false,
-                        nothing, identity
+                        nothing, identity,
+                        nothing, nothing, false, false
                     )
                 else
                     w, wp = setup_w_wp(cb, autojacvec, pos_neg, cache_event_idx, _t)
@@ -672,7 +676,8 @@ function get_cb_diffcaches(
                         nothing, nothing, nothing, paramjac_config,
                         nothing, nothing, nothing, nothing, nothing,
                         nothing, nothing, nothing, false,
-                        nothing, identity
+                        nothing, identity,
+                        nothing, nothing, false, false
                     )
 
                     paramjac_config = _get_wp_paramjac_config(
@@ -688,7 +693,8 @@ function get_cb_diffcaches(
                         nothing, nothing, nothing, paramjac_config,
                         nothing, nothing, nothing, nothing, nothing,
                         nothing, nothing, nothing, false,
-                        nothing, identity
+                        nothing, identity,
+                        nothing, nothing, false, false
                     )
                 end
 
