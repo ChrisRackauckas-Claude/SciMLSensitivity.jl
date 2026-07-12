@@ -21,6 +21,18 @@ const ConcreteNonlinearProblem = Union{
 const have_not_warned_vjp = Ref(true)
 const STACKTRACE_WITH_VJPWARN = Ref(false)
 
+function _materialize_arraypartition_tangent(tangent::Tangent, primal::ArrayPartition)
+    components = tangent.x
+    length(components) == length(primal.x) ||
+        throw(DimensionMismatch("cotangent and primal ArrayPartitions have different lengths"))
+
+    values = ntuple(length(primal.x)) do i
+        component = unthunk(components[i])
+        return component isa Union{NoTangent, ZeroTangent} ? zero(primal.x[i]) : component
+    end
+    return ArrayPartition(values...)
+end
+
 
 # Non-capturing probe for the EnzymeVJP availability check. The RHS `f` is passed as an
 # explicit argument (annotated `Duplicated`) rather than captured in a closure. Capturing it
@@ -883,6 +895,9 @@ function SciMLBase._concrete_solve_adjoint(
                         Δ isa Tangent
                     x = Δ isa AbstractVectorOfArray ? Δu.u[i] :
                         (Δ isa Tangent ? Δu[i] : Δ[i])
+                    if x isa Tangent && u isa ArrayPartition
+                        x = _materialize_arraypartition_tangent(x, u)
+                    end
                     if _save_idxs isa Number
                         _out[_save_idxs] = x[_save_idxs]
                     elseif _save_idxs isa Colon
@@ -962,8 +977,13 @@ function SciMLBase._concrete_solve_adjoint(
             else
                 !Base.isconcretetype(eltype(Δ)) &&
                     ((Δ isa AbstractVectorOfArray ? Δ.u[i] : Δ[i]) isa NoTangent || eltype(Δ) <: NoTangent) && return
-                if Δ isa AbstractArray{<:AbstractArray} || Δ isa AbstractVectorOfArray
-                    x = Δ isa AbstractVectorOfArray ? Δ.u[i] : Δ[i]
+                if Δ isa AbstractArray{<:AbstractArray} || Δ isa AbstractVectorOfArray ||
+                        Δ isa Tangent
+                    x = Δ isa AbstractVectorOfArray ? Δ.u[i] :
+                        (Δ isa Tangent ? Δ.u[i] : Δ[i])
+                    if x isa Tangent && u isa ArrayPartition
+                        x = _materialize_arraypartition_tangent(x, u)
+                    end
                     if _save_idxs isa Number
                         _out = @view(x[_save_idxs])
                     elseif _save_idxs isa Colon
@@ -1052,7 +1072,13 @@ function SciMLBase._concrete_solve_adjoint(
             )
         end
 
-        du0 = reshape(du0, size(u0))
+        if u0 isa ArrayPartition
+            du0_partition = zero(u0)
+            copyto!(du0_partition, du0)
+            du0 = du0_partition
+        else
+            du0 = reshape(du0, size(u0))
+        end
 
         dp_full = if p === nothing || p === SciMLBase.NullParameters()
             nothing

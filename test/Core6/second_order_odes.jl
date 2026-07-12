@@ -1,4 +1,5 @@
 using OrdinaryDiffEq, SciMLSensitivity, Zygote, RecursiveArrayTools, Test
+import Mooncake
 
 u0 = Float32[1.0; 2.0]
 du0 = Float32[0.0; 2.0]
@@ -80,3 +81,21 @@ ddu04, du04, dp4 = Zygote.gradient(
 @test dp1 ≈ dp2
 @test dp1 ≈ dp3
 @test dp1 ≈ dp4
+
+@testset "Mooncake ArrayPartition cotangent" begin
+    loss(p) = sum(
+        Array(
+            solve(
+                prob, Tsit5(); p, saveat = t,
+                sensealg = InterpolatingAdjoint(autojacvec = EnzymeVJP())
+            )
+        )
+    )
+    cache = Mooncake.prepare_gradient_cache(
+        loss, p; config = Mooncake.Config(; friendly_tangents = true)
+    )
+    value, gradient = Mooncake.value_and_gradient!!(cache, loss, p)
+
+    @test value ≈ loss(p)
+    @test gradient[2] ≈ dp1
+end
