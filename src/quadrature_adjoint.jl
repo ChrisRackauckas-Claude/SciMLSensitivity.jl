@@ -160,36 +160,18 @@ end
     )
 
     jac_prototype = sol.prob.f.jac_prototype
-    adjoint_jac_prototype = !sense.discrete || jac_prototype === nothing ? nothing :
+    # The adjoint state is just λ, so the transposed forward prototype is the
+    # adjoint rhs sparsity for continuous costs too (the dgdu forcing term is
+    # λ-independent).
+    adjoint_jac_prototype = jac_prototype === nothing ? nothing :
         copy(jac_prototype')
 
-    # When the user provides an analytical Jacobian for the forward problem,
-    # construct an adjoint Jacobian that evaluates -(df/du)^T at the
-    # interpolated forward solution. This avoids finite-difference Jacobian
-    # computation in the adjoint solver.
-    adjoint_jac = if SciMLBase.has_jac(sol.prob.f) && jac_prototype !== nothing
-        _fwd_jac_cache = copy(jac_prototype)
-        _fwd_jac_fn = sol.prob.f.jac
-        _fwd_sol = sol
-        if jac_prototype isa SparseArrays.AbstractSparseMatrixCSC
-            function (J_adj, _λ, _p, _t)
-                _y = _fwd_sol(_t, continuity = :right)
-                _fwd_jac_fn(_fwd_jac_cache, _y, _p, _t)
-                SparseArrays.ftranspose!(J_adj, _fwd_jac_cache, -)
-                return nothing
-            end
-        else
-            function (J_adj, _λ, _p, _t)
-                _y = _fwd_sol(_t, continuity = :right)
-                _fwd_jac_fn(_fwd_jac_cache, _y, _p, _t)
-                transpose!(J_adj, _fwd_jac_cache)
-                lmul!(-1, J_adj)
-                return nothing
-            end
-        end
-    else
-        nothing
-    end
+    # The adjoint rhs is linear in λ, so its Jacobian is exactly -(df/du)^T at
+    # the interpolated forward solution: evaluate it from the user's analytical
+    # Jacobian when given, or by ForwardDiff/FiniteDiff of the forward rhs.
+    # This avoids differentiating the vjp-based adjoint rhs in the implicit
+    # adjoint solver.
+    adjoint_jac = build_adjoint_jac(sol, sensealg, alg, f, tspan)
 
     original_mm = sol.prob.f.mass_matrix
     if original_mm === I || original_mm === (I, I)
