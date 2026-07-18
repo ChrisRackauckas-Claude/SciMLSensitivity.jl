@@ -229,3 +229,92 @@ end
         @test jac_calls[] > 0
     end
 end
+
+@testset "AD fallback adjoint Jacobian (no user jac)" begin
+    f_plain = ODEFunction(lotka_volterra!)
+    prob = ODEProblem(f_plain, u0, tspan, p)
+    sol = solve(prob, Rodas5P(); solver_kwargs...)
+
+    # Unit test: the fallback builds -(df/du)^T at the interpolated forward state
+    for sensealg in (GaussAdjoint(), GaussAdjoint(autodiff = false))
+        jacfn = SciMLSensitivity.build_adjoint_jac(
+            sol, sensealg, Rodas5P(), sol.prob.f, reverse(tspan)
+        )
+        @test jacfn !== nothing
+        J_adj = zeros(2, 2)
+        jacfn(J_adj, nothing, p, 4.2)
+        J_ref = zeros(2, 2)
+        lv_jac!(J_ref, sol(4.2), p, 4.2)
+        @test isapprox(J_adj, -J_ref', rtol = 1.0e-6)
+    end
+
+    # No fallback for explicit adjoint solvers (Jacobian never used) or
+    # finite-difference implicit solvers (rhs may not be Dual-safe there).
+    @test SciMLSensitivity.build_adjoint_jac(
+        sol, GaussAdjoint(), Tsit5(), sol.prob.f, reverse(tspan)
+    ) === nothing
+    @test SciMLSensitivity.build_adjoint_jac(
+        sol, GaussAdjoint(), Rodas5P(autodiff = AutoFiniteDiff()), sol.prob.f,
+        reverse(tspan)
+    ) === nothing
+
+    # End-to-end: gradients with an implicit adjoint solver match ForwardDiff
+    ts_disc = collect(0.5:0.5:10.0)
+    dgdu_disc = (out, u, p, t, i) -> (out .= 1)
+    function loss_fd(p)
+        _sol = solve(
+            remake(prob, p = p), Rodas5P(); saveat = ts_disc, solver_kwargs...
+        )
+        return sum(sum(u) for u in _sol.u)
+    end
+    grad_ref = ForwardDiff.gradient(loss_fd, p)
+    @testset "$name / Rodas5P" for (name, sensealg) in [
+            ("GaussAdjoint(EnzymeVJP)", GaussAdjoint(autojacvec = EnzymeVJP())),
+            ("GaussAdjoint(ReverseDiffVJP)", GaussAdjoint(autojacvec = ReverseDiffVJP())),
+            (
+                "QuadratureAdjoint(EnzymeVJP)",
+                QuadratureAdjoint(
+                    autojacvec = EnzymeVJP(), abstol = 1.0e-10, reltol = 1.0e-10
+                ),
+            ),
+        ]
+        du0, dp = adjoint_sensitivities(
+            sol, Rodas5P(); t = ts_disc, dgdu_discrete = dgdu_disc,
+            sensealg = sensealg, abstol = 1.0e-8, reltol = 1.0e-8
+        )
+        @test isapprox(vec(dp), grad_ref, rtol = 1.0e-4)
+    end
+end
+
+@testset "Sparse user jac + continuous cost (regression: ftranspose! into dense)" begin
+    # Before the adjoint_jac_prototype fix, the sparse-jac closure was passed to
+    # the adjoint solver without its sparse prototype for continuous costs, so
+    # `ftranspose!` hit a dense destination and threw a MethodError. The sparse
+    # setup must run and agree with the dense-prototype setup.
+    jp_dense = zeros(2, 2)
+    lv_jac!(jp_dense, u0, p, 0.0)
+    dgdu_cont = (out, u, p, t) -> (out .= 1)
+    results = map((sparse(jp_dense), copy(jp_dense))) do jp
+        f = ODEFunction(lotka_volterra!; jac = lv_jac!, jac_prototype = jp)
+        prob = ODEProblem(f, u0, tspan, p)
+        sol = solve(prob, Rodas5P(); solver_kwargs...)
+        map(
+            (
+                GaussAdjoint(autojacvec = ReverseDiffVJP()),
+                QuadratureAdjoint(
+                    autojacvec = ReverseDiffVJP(), abstol = 1.0e-10, reltol = 1.0e-10
+                ),
+            )
+        ) do sa
+            du0, dp = adjoint_sensitivities(
+                sol, Rodas5P(); dgdu_continuous = dgdu_cont,
+                sensealg = sa, abstol = 1.0e-8, reltol = 1.0e-8
+            )
+            vec(dp)
+        end
+    end
+    dp_sparse, dp_dense = results
+    for (dps, dpd) in zip(dp_sparse, dp_dense)
+        @test isapprox(dps, dpd, rtol = 1.0e-6)
+    end
+end

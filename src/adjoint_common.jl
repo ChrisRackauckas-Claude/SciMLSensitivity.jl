@@ -815,6 +815,79 @@ function getprob(S::SensitivityFunction)
 end
 inplace_sensitivity(S::SensitivityFunction) = isinplace(getprob(S))
 
+"""
+    build_adjoint_jac(sol, sensealg, alg, f, tspan)
+
+Construct a `jac(J_adj, λ, p, t)` for the adjoint ODE of the state-only adjoint
+methods (`GaussAdjoint`, `QuadratureAdjoint`, whose adjoint state is just `λ`).
+The adjoint rhs `-(∂f/∂u)ᵀλ` is linear in `λ`, so its Jacobian is exactly
+`-(∂f/∂u)ᵀ` evaluated at the interpolated forward solution — independent of `λ`.
+
+When the user supplies an analytical `jac` (with a `jac_prototype`), evaluate it
+at `y(t)` and negate-transpose. Otherwise, for dense in-place ODEs solved by a
+ForwardDiff-based implicit method, fall back to differentiating the *forward*
+rhs (ForwardDiff/FiniteDiff per `sensealg`'s `autodiff` setting) and
+negate-transposing. Without this, the implicit adjoint solver differentiates the
+vjp-based adjoint rhs itself, which costs a full vjp (plus a forward-solution
+interpolation) per Jacobian column — and with `ReverseDiffVJP` re-records the
+tape with `Dual` numbers on every Jacobian evaluation.
+
+Returns `nothing` when no cheap exact Jacobian can be built; the adjoint solver
+then falls back to its own AD/FD of the adjoint rhs.
+"""
+function build_adjoint_jac(sol, sensealg, alg, f, tspan)
+    jac_prototype = sol.prob.f.jac_prototype
+    u0 = state_values(sol.prob)
+    if SciMLBase.has_jac(sol.prob.f) && jac_prototype !== nothing
+        _fwd_jac_cache = copy(jac_prototype)
+        _fwd_jac_fn = sol.prob.f.jac
+        _fwd_sol = sol
+        if jac_prototype isa SparseArrays.AbstractSparseMatrixCSC
+            return function (J_adj, _λ, _p, _t)
+                _y = _fwd_sol(_t, continuity = :right)
+                _fwd_jac_fn(_fwd_jac_cache, _y, _p, _t)
+                SparseArrays.ftranspose!(J_adj, _fwd_jac_cache, -)
+                return nothing
+            end
+        else
+            return function (J_adj, _λ, _p, _t)
+                _y = _fwd_sol(_t, continuity = :right)
+                _fwd_jac_fn(_fwd_jac_cache, _y, _p, _t)
+                transpose!(J_adj, _fwd_jac_cache)
+                lmul!(-1, J_adj)
+                return nothing
+            end
+        end
+    elseif jac_prototype === nothing && alg !== nothing &&
+            SciMLBase.forwarddiffs_model(alg) &&
+            SciMLBase.isinplace(sol.prob) && u0 isa AbstractArray &&
+            ArrayInterface.ismutable(u0) && eltype(u0) <: AbstractFloat
+        # `forwarddiffs_model(alg)` implies the adjoint solver would push `Dual`
+        # numbers through the vjp-based adjoint rhs anyway, so requiring the
+        # forward rhs to be ForwardDiff-compatible here does not narrow support.
+        _fwd_sol = sol
+        _f = unwrapped_f(f)
+        numindvar = length(u0)
+        _J_cache = similar(u0, numindvar, numindvar)
+        _J_cache .= false
+        _uf = SciMLBase.UJacobianWrapper(_f, tspan[2], parameter_values(sol.prob))
+        _jac_config = build_jac_config(sensealg, _uf, u0)
+        _y_cache = similar(u0)
+        _fx_cache = similar(u0)
+        return function (J_adj, _λ, _p, _t)
+            _fwd_sol(_y_cache, _t, continuity = :right)
+            _uf.t = _t
+            _uf.p = _p
+            jacobian!(_J_cache, _uf, _y_cache, _fx_cache, sensealg, _jac_config)
+            transpose!(J_adj, _J_cache)
+            lmul!(-1, J_adj)
+            return nothing
+        end
+    else
+        return nothing
+    end
+end
+
 struct ReverseLossCallback{
         λType, timeType, yType, RefType, FMType, AlgType, dg1Type,
         dg2Type,
