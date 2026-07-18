@@ -85,7 +85,7 @@ callback = function (state, l; doplot = false)
     return l < 0.01
 end
 
-adtype1 = OPT.AutoEnzyme()
+adtype1 = OPT.AutoEnzyme(; mode = Enzyme.set_runtime_activity(Enzyme.Reverse))
 optf1 = OPT.OptimizationFunction((x, p) -> loss_neuralode(x), adtype1)
 optprob1 = OPT.OptimizationProblem(optf1, ps)
 pstart = OPT.solve(optprob1, OPO.Adam(0.01); callback, maxiters = 100).u
