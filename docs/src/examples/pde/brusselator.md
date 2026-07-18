@@ -228,7 +228,7 @@ Once the loss function is defined, we use the ADAM optimizer to train the neural
 ```@example bruss
 println("[Training] Starting optimization...")
 import OptimizationOptimisers as OPO
-adtype = OPT.AutoEnzyme()
+adtype = OPT.AutoEnzyme(; mode = Enzyme.set_runtime_activity(Enzyme.Reverse))
 optf = OPT.OptimizationFunction(loss_fn, adtype)
 optprob = OPT.OptimizationProblem(optf, ps_init)
 loss_history = Float32[]

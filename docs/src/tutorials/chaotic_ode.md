@@ -133,7 +133,7 @@ function G(p)
         sensealg = SMS.ForwardLSS(; g))
     sum(getindex.(_sol.u, 3))
 end
-dp1 = DI.gradient(p -> G(p), DI.AutoEnzyme(), p)
+dp1 = DI.gradient(p -> G(p), DI.AutoEnzyme(; mode = Enzyme.set_runtime_activity(Enzyme.Reverse)), p)
 ```
 
 Alternatively, we can define the `ForwardLSSProblem` and solve it

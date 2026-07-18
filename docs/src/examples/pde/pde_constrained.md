@@ -92,7 +92,7 @@ cb((; u = ps), loss(ps)) # Testing callback function
 Plots.scatter(sol[:, end], label = "Truth", size = (800, 500))
 Plots.plot!(PRED[end][:, end], lw = 2, label = "Prediction")
 
-adtype = OPT.AutoEnzyme()
+adtype = OPT.AutoEnzyme(; mode = Enzyme.set_runtime_activity(Enzyme.Reverse))
 optf = OPT.OptimizationFunction((x, p) -> loss(x), adtype)
 
 optprob = OPT.OptimizationProblem(optf, ps)
@@ -283,7 +283,7 @@ The resulting best parameters are stored in `res` and `res.u` returns the
 parameters that minimize the cost function.
 
 ```@example pde2
-adtype = OPT.AutoEnzyme()
+adtype = OPT.AutoEnzyme(; mode = Enzyme.set_runtime_activity(Enzyme.Reverse))
 optf = OPT.OptimizationFunction((x, p) -> loss(x), adtype)
 
 optprob = OPT.OptimizationProblem(optf, ps)

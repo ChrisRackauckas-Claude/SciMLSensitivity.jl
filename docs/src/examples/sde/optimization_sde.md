@@ -179,8 +179,8 @@ end
 Let's optimize
 
 ```@example sde
-import Enzyme
-adtype = OPT.AutoEnzyme()
+import Mooncake
+adtype = OPT.AutoMooncake(; config = Mooncake.Config(; friendly_tangents = true))
 optf = OPT.OptimizationFunction((x, p) -> loss_sde(x), adtype)
 
 optprob = OPT.OptimizationProblem(optf, p)

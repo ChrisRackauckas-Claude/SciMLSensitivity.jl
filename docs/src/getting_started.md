@@ -96,7 +96,7 @@ function sum_of_solution(p)
     _prob = ODE.remake(prob; p)
     sum(ODE.solve(_prob, ODE.Tsit5(), reltol = 1e-6, abstol = 1e-6, saveat = 0.1))
 end
-backend = DI.AutoEnzyme()
+backend = DI.AutoEnzyme(; mode = Enzyme.set_runtime_activity(Enzyme.Reverse))
 dp1 = DI.gradient(sum_of_solution, backend, p)
 ```
 
