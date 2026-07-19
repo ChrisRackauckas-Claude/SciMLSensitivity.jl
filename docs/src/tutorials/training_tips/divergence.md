@@ -17,7 +17,7 @@ parameters. This is shown in the loss function:
 function loss(p)
     tmp_prob = ODE.remake(prob; p)
     tmp_sol = ODE.solve(tmp_prob, ODE.Tsit5(), saveat = 0.1)
-    if tmp_sol.retcode == SciMLBase.ReturnCode.Success
+    if SciMLBase.successful_retcode(tmp_sol)
         return sum(abs2, Array(tmp_sol) - dataset)
     else
         return Inf
@@ -30,7 +30,7 @@ A full example making use of this trick is:
 ```@example divergence
 import OrdinaryDiffEq as ODE, SciMLSensitivity as SMS, SciMLBase, Optimization as OPT,
        OptimizationOptimisers as OPO, Plots
-import Mooncake
+import Enzyme
 
 function lotka_volterra!(du, u, p, t)
     rab, wol = u
@@ -58,7 +58,7 @@ Plots.scatter!(sol.t, dataset')
 function loss(p)
     tmp_prob = ODE.remake(prob; p)
     tmp_sol = ODE.solve(tmp_prob, ODE.Tsit5(), saveat = 0.1)
-    if tmp_sol.retcode == SciMLBase.ReturnCode.Success
+    if SciMLBase.successful_retcode(tmp_sol)
         return sum(abs2, Array(tmp_sol) - dataset)
     else
         return Inf
@@ -66,7 +66,7 @@ function loss(p)
 end
 
 pinit = [1.2, 0.8, 2.5, 0.8]
-adtype = OPT.AutoMooncake(; config = Mooncake.Config(; friendly_tangents = true))
+adtype = OPT.AutoEnzyme(; mode = Enzyme.set_runtime_activity(Enzyme.Reverse))
 optf = OPT.OptimizationFunction((x, p) -> loss(x), adtype)
 
 optprob = OPT.OptimizationProblem(optf, pinit)
