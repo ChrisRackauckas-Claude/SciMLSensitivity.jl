@@ -186,9 +186,9 @@ function loss(p_nn; alg = SDE.EM(), sensealg = SMS.BacksolveAdjoint(autojacvec =
         myparameters = [myparameters.Δ, myparameters.Ωmax, myparameters.κ])
     u0 = prepare_initial(myparameters.dt, myparameters.numtraj)
 
-    function prob_func(prob, i, repeat)
+    function prob_func(prob, ctx)
         # prepare initial state and applied control pulse
-        u0tmp = deepcopy(vec(u0[:, i]))
+        u0tmp = deepcopy(vec(u0[:, ctx.sim_id]))
         W = sqrt(myparameters.dt) * randn(typeof(myparameters.dt), size(myparameters.ts)) #for 1 trajectory
         W1 = cumsum([zero(myparameters.dt); W[1:(end - 1)]], dims = 1)
         NG = DNP.NoiseGrid(myparameters.ts, W1)
@@ -218,9 +218,9 @@ function visualize(p_nn; alg = SDE.EM())
     pars = CA.ComponentArray(; p_nn,
         myparameters = [myparameters.Δ, myparameters.Ωmax, myparameters.κ])
 
-    function prob_func(prob, i, repeat)
+    function prob_func(prob, ctx)
         # prepare initial state and applied control pulse
-        u0tmp = deepcopy(vec(u0[:, i]))
+        u0tmp = deepcopy(vec(u0[:, ctx.sim_id]))
         W = sqrt(myparameters.dt) * randn(typeof(myparameters.dt), size(myparameters.ts)) #for 1 trajectory
         W1 = cumsum([zero(myparameters.dt); W[1:(end - 1)]], dims = 1)
         NG = DNP.NoiseGrid(myparameters.ts, W1)
@@ -528,9 +528,9 @@ function loss(p_nn; alg = SDE.EM(), sensealg = SMS.BacksolveAdjoint(autojacvec =
         myparameters = [myparameters.Δ, myparameters.Ωmax, myparameters.κ])
     u0 = prepare_initial(myparameters.dt, myparameters.numtraj)
 
-    function prob_func(prob, i, repeat)
+    function prob_func(prob, ctx)
         # prepare initial state and applied control pulse
-        u0tmp = deepcopy(vec(u0[:, i]))
+        u0tmp = deepcopy(vec(u0[:, ctx.sim_id]))
         W = sqrt(myparameters.dt) * randn(typeof(myparameters.dt), size(myparameters.ts)) #for 1 trajectory
         W1 = cumsum([zero(myparameters.dt); W[1:(end - 1)]], dims = 1)
         NG = DNP.NoiseGrid(myparameters.ts, W1)
@@ -566,9 +566,9 @@ function visualize(p_nn; alg = SDE.EM())
     pars = CA.ComponentArray(; p_nn,
         myparameters = [myparameters.Δ, myparameters.Ωmax, myparameters.κ])
 
-    function prob_func(prob, i, repeat)
+    function prob_func(prob, ctx)
         # prepare initial state and applied control pulse
-        u0tmp = deepcopy(vec(u0[:, i]))
+        u0tmp = deepcopy(vec(u0[:, ctx.sim_id]))
         W = sqrt(myparameters.dt) * randn(typeof(myparameters.dt), size(myparameters.ts)) #for 1 trajectory
         W1 = cumsum([zero(myparameters.dt); W[1:(end - 1)]], dims = 1)
         NG = DNP.NoiseGrid(myparameters.ts, W1)

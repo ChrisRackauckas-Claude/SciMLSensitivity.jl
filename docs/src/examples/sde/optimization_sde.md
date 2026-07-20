@@ -84,10 +84,10 @@ function cb2(st, l)
     arrsol1 = predict(st.u)
     means = Statistics.mean(arrsol1, dims = 3)[:, :]
     vars = Statistics.var(arrsol1, dims = 3)[:, :]
-    p1 = Plots.plot(sol[1].t, means', lw = 5)
-    Plots.scatter!(p1, sol[1].t, truemean')
-    p2 = Plots.plot(sol[1].t, vars', lw = 5)
-    Plots.scatter!(p2, sol[1].t, truevar')
+    p1 = Plots.plot(sol.u[1].t, means', lw = 5)
+    Plots.scatter!(p1, sol.u[1].t, truemean')
+    p2 = Plots.plot(sol.u[1].t, vars', lw = 5)
+    Plots.scatter!(p2, sol.u[1].t, truevar')
     p = Plots.plot(p1, p2, layout = (2, 1))
     display(p)
     false
