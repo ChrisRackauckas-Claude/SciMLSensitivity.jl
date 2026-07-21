@@ -92,6 +92,7 @@ Distributed and GPU minibatching are described below.
 
 ```@example dataparallel
 import OrdinaryDiffEq as ODE
+import SciMLBase
 import Optimization as OPT
 import OptimizationOptimisers as OPO
 import SciMLSensitivity as SMS
@@ -103,8 +104,8 @@ u0 = [3.0]
 function model1(θ, ensemble)
     prob = ODE.ODEProblem((u, p, t) -> 1.01u .* p, [θ[1]], (0.0, 1.0), [θ[2]])
 
-    function prob_func(prob, i, repeat)
-        ODE.remake(prob, u0 = 0.5 .+ i / 100 .* prob.u0)
+    function prob_func(prob, ctx)
+        ODE.remake(prob, u0 = 0.5 .+ ctx.sim_id / 100 .* prob.u0)
     end
 
     ensemble_prob = ODE.EnsembleProblem(prob; prob_func)
@@ -112,8 +113,8 @@ function model1(θ, ensemble)
 end
 
 # loss function
-loss_serial(θ) = sum(abs2, 1.0 .- Array(model1(θ, ODE.EnsembleSerial())))
-loss_threaded(θ) = sum(abs2, 1.0 .- Array(model1(θ, ODE.EnsembleThreads())))
+loss_serial(θ) = sum(abs2, 1.0 .- Array(model1(θ, SciMLBase.EnsembleSerial())))
+loss_threaded(θ) = sum(abs2, 1.0 .- Array(model1(θ, SciMLBase.EnsembleThreads())))
 
 callback = function (θ, l) # callback function to observe training
     @show l
@@ -151,12 +152,13 @@ prob = ODE.ODEProblem((u, p, t) -> 1.01u .* p, [θ[1]], (0.0, 1.0), [θ[2]])
 
 In the `prob_func` we define how to build a new problem based on the
 base problem. In this case, we want to change `u0` by a constant, i.e.
-`0.5 .+ i/100 .* prob.u0` for different trajectories labelled by `i`.
+`0.5 .+ ctx.sim_id/100 .* prob.u0` for different trajectories, where
+`ctx.sim_id` is the trajectory index carried by the `EnsembleContext`.
 Thus we use the [remake function from the problem interface](https://docs.sciml.ai/DiffEqDocs/stable/basics/problem/#Modification-of-problem-types) to do so:
 
 ```@example dataparallel
-function prob_func(prob, i, repeat)
-    ODE.remake(prob, u0 = 0.5 .+ i / 100 .* prob.u0)
+function prob_func(prob, ctx)
+    ODE.remake(prob, u0 = 0.5 .+ ctx.sim_id / 100 .* prob.u0)
 end
 ```
 
@@ -168,19 +170,19 @@ ensemble_prob = ODE.EnsembleProblem(prob; prob_func)
 
 Now, to solve an ensemble problem, we need to choose an ensembling
 algorithm and choose the number of trajectories to solve. Here let's
-solve this in serial with 100 trajectories. Note that `i` will thus run
-from `1:100`.
+solve this in serial with 100 trajectories. Note that `ctx.sim_id` will
+thus run from `1:100`.
 
 ```@example dataparallel
 sim = ODE.solve(
-    ensemble_prob, ODE.Tsit5(), ODE.EnsembleSerial(), saveat = 0.1, trajectories = 100)
+    ensemble_prob, ODE.Tsit5(), SciMLBase.EnsembleSerial(), saveat = 0.1, trajectories = 100)
 ```
 
 and thus running in multithreading would be:
 
 ```@example dataparallel
 sim = ODE.solve(
-    ensemble_prob, ODE.Tsit5(), ODE.EnsembleThreads(), saveat = 0.1, trajectories = 100)
+    ensemble_prob, ODE.Tsit5(), SciMLBase.EnsembleThreads(), saveat = 0.1, trajectories = 100)
 ```
 
 This whole mechanism is differentiable, so we then put it in a training
@@ -198,7 +200,7 @@ all the same, except you utilize `EnsembleDistributed` as the ensembler:
 
 ```@example dataparallel
 sim = ODE.solve(
-    ensemble_prob, ODE.Tsit5(), ODE.EnsembleDistributed(), saveat = 0.1, trajectories = 100)
+    ensemble_prob, ODE.Tsit5(), SciMLBase.EnsembleDistributed(), saveat = 0.1, trajectories = 100)
 ```
 
 Note that for this to work, you need to ensure that your processes are
@@ -214,6 +216,7 @@ Distributed.addprocs(4)
 
 Distributed.@everywhere begin
     import OrdinaryDiffEq as ODE
+    import SciMLBase
     import Optimization as OPT
     import OptimizationOptimisers as OPO
     function f(u, p, t)
@@ -228,8 +231,8 @@ u0 = [3.0]
 function model1(θ, ensemble)
     prob = ODE.ODEProblem(f, [θ[1]], (0.0, 1.0), [θ[2]])
 
-    function prob_func(prob, i, repeat)
-        ODE.remake(prob, u0 = 0.5 .+ i / 100 .* prob.u0)
+    function prob_func(prob, ctx)
+        ODE.remake(prob, u0 = 0.5 .+ ctx.sim_id / 100 .* prob.u0)
     end
 
     ensemble_prob = ODE.EnsembleProblem(prob; prob_func)
@@ -242,7 +245,7 @@ callback = function (θ, l) # callback function to observe training
 end
 
 opt = OPO.Adam(0.1)
-loss_distributed(θ) = sum(abs2, 1.0 .- Array(model1(θ, ODE.EnsembleDistributed())))
+loss_distributed(θ) = sum(abs2, 1.0 .- Array(model1(θ, SciMLBase.EnsembleDistributed())))
 l1 = loss_distributed(θ)
 
 adtype = OPT.AutoZygote()
@@ -285,8 +288,8 @@ u0 = [3.0]
 function model1(θ, ensemble)
     prob = ODE.ODEProblem(f, [θ[1]], (0.0, 1.0), [θ[2]])
 
-    function prob_func(prob, i, repeat)
-        ODE.remake(prob, u0 = 0.5 .+ i / 100 .* prob.u0)
+    function prob_func(prob, ctx)
+        ODE.remake(prob, u0 = 0.5 .+ ctx.sim_id / 100 .* prob.u0)
     end
 
     ensemble_prob = ODE.EnsembleProblem(prob; prob_func)
