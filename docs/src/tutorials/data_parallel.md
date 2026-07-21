@@ -96,7 +96,7 @@ import SciMLBase
 import Optimization as OPT
 import OptimizationOptimisers as OPO
 import SciMLSensitivity as SMS
-import Zygote
+import Enzyme
 pa = [1.0]
 u0 = [3.0]
 θ = [u0; pa]
@@ -124,7 +124,7 @@ end
 opt = OPO.Adam(0.1)
 l1 = loss_serial(θ)
 
-adtype = OPT.AutoZygote()
+adtype = OPT.AutoEnzyme(; mode = Enzyme.set_runtime_activity(Enzyme.Reverse))
 optf = OPT.OptimizationFunction((x, p) -> loss_serial(x), adtype)
 optprob = OPT.OptimizationProblem(optf, θ)
 
@@ -248,7 +248,7 @@ opt = OPO.Adam(0.1)
 loss_distributed(θ) = sum(abs2, 1.0 .- Array(model1(θ, SciMLBase.EnsembleDistributed())))
 l1 = loss_distributed(θ)
 
-adtype = OPT.AutoZygote()
+adtype = OPT.AutoEnzyme(; mode = Enzyme.set_runtime_activity(Enzyme.Reverse))
 optf = OPT.OptimizationFunction((x, p) -> loss_distributed(x), adtype)
 optprob = OPT.OptimizationProblem(optf, θ)
 
@@ -305,7 +305,7 @@ opt = OPO.Adam(0.1)
 loss_gpu(θ) = sum(abs2, 1.0 .- Array(model1(θ, DiffEqGPU.EnsembleGPUArray())))
 l1 = loss_gpu(θ)
 
-adtype = OPT.AutoZygote()
+adtype = OPT.AutoEnzyme(; mode = Enzyme.set_runtime_activity(Enzyme.Reverse))
 optf = OPT.OptimizationFunction((x, p) -> loss_gpu(x), adtype)
 optprob = OPT.OptimizationProblem(optf, θ)
 
