@@ -1736,43 +1736,63 @@ function _jacNoise!(
 
     _p_scimlstruct = false
     if want_pgrad
-        (; tunables, repack) = S.diffcache
         _p_scimlstruct = isscimlstructure(p) && !(p isa AbstractArray)
     end
+
+    # Buffers pre-allocated once in the diffcache (see the EnzymeVJP branch in
+    # `adjointdiffcache`), reused and re-zeroed per reverse-solver step × column.
+    cfg = S.diffcache.paramjac_noise_config
+    du_out = cfg.du_out
+    du_seed = cfg.du_seed
+    u_buf = cfg.u_buf
+    du_u = cfg.du_u
+    func_shadow = cfg.func_shadow
+    dp_dense = cfg.dp_dense
+    cached_shadow = cfg.shadow_p
 
     func = SciMLBase.Void(f)
 
     for i in 1:m
-        # Primal output buffer (zeroed) and its cotangent seed. Enzyme consumes the
-        # seed shadow during the reverse pass, so both are freshly allocated per
-        # column. Seeding column `i` with `λ` computes the vjp of the `i`-th Wiener
-        # column of the noise term; for diagonal noise a single scalar `λ[i]` at
-        # component `i` computes the vjp of the `i`-th diagonal noise component.
-        du_out = diag ? zero(y) : zero(noise_rate_prototype)
-        du_seed = diag ? zero(y) : zero(noise_rate_prototype)
+        # Zero the reused output buffer and its cotangent seed, then seed column
+        # `i` with `λ`: computes the vjp of the `i`-th Wiener column of the noise
+        # term. For diagonal noise a single scalar `λ[i]` at component `i`
+        # computes the vjp of the `i`-th diagonal noise component.
+        Enzyme.remake_zero!(du_out)
+        Enzyme.remake_zero!(du_seed)
         if diag
             du_seed[i] = λ[i]
         else
             @views du_seed[:, i] .= λ
         end
 
-        u_buf = Base.copy(y)
-        du_u = zero(y)
+        vec(u_buf) .= vec(y)
+        Enzyme.remake_zero!(du_u)
 
-        local dp_shadow
+        _shadow_p = nothing
         dup_p = if want_pgrad
-            if _p_scimlstruct
-                dp_shadow = repack(zero(tunables))
+            if cached_shadow isa EnzymeViewPrimalBuffer
+                # view-backed p: dense primal buffer + dense shadow, both re-zeroed.
+                copyto!(cached_shadow.buf, p)
+                Enzyme.remake_zero!(dp_dense)
+                _shadow_p = dp_dense
+                Enzyme.Duplicated(cached_shadow.buf, dp_dense)
+            elseif cached_shadow !== nothing
+                # SciMLStructures p: disjoint `make_zero(p)` shadow (see #1470).
+                Enzyme.remake_zero!(cached_shadow)
+                _shadow_p = cached_shadow
+                Enzyme.Duplicated(p, cached_shadow)
             else
-                dp_shadow = zero(p)
+                # plain-array p: the dense shadow buffer is the gradient.
+                Enzyme.remake_zero!(dp_dense)
+                _shadow_p = dp_dense
+                Enzyme.Duplicated(p, dp_dense)
             end
-            Enzyme.Duplicated(p, dp_shadow)
         else
             Enzyme.Const(p)
         end
 
+        Enzyme.remake_zero!(func_shadow)
         if inplace
-            func_shadow = Enzyme.make_zero(func)
             Enzyme.autodiff(
                 enzyme_mode, Enzyme.Duplicated(func, func_shadow), Enzyme.Const,
                 Enzyme.Duplicated(du_out, du_seed),
@@ -1780,10 +1800,9 @@ function _jacNoise!(
                 dup_p, Enzyme.Const(t)
             )
         else
-            f_shadow = Enzyme.make_zero(f)
             Enzyme.autodiff(
                 enzyme_mode, Enzyme.Const(gclosure1), Enzyme.Const,
-                Enzyme.Duplicated(f, f_shadow),
+                Enzyme.Duplicated(f, func_shadow),
                 Enzyme.Duplicated(du_out, du_seed),
                 Enzyme.Duplicated(u_buf, du_u),
                 dup_p, Enzyme.Const(t)
@@ -1793,10 +1812,10 @@ function _jacNoise!(
         dλ !== nothing && (dλ[:, i] .= vec(du_u))
         if want_pgrad && !isempty(dgrad)
             if _p_scimlstruct
-                grad_tunables, _, _ = canonicalize(Tunable(), dp_shadow)
+                grad_tunables, _, _ = canonicalize(Tunable(), _shadow_p)
                 dgrad[:, i] .= vec(grad_tunables)
             else
-                dgrad[:, i] .= vec(dp_shadow)
+                dgrad[:, i] .= vec(_shadow_p)
             end
         end
         if dy !== nothing
