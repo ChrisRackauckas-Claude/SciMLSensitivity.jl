@@ -2049,6 +2049,9 @@ function SciMLBase._concrete_solve_adjoint(
         tunables, repack, _ = canonicalize(Tunable(), p)
     end
 
+    replace_tunables(_p) = p isa AbstractArray ? reshape(_p, size(p)) :
+        SciMLStructures.replace(Tunable(), p, _p)
+
     function tracker_adjoint_forwardpass(_u0, _p)
         if (
                 convert_tspan(sensealg) === nothing &&
@@ -2117,7 +2120,7 @@ function SciMLBase._concrete_solve_adjoint(
                             _g
                         ),
                         g = _g,
-                        u0 = _u0, p = SciMLStructures.replace(Tunable(), p, _p),
+                        u0 = _u0, p = replace_tunables(_p),
                         tspan = _tspan, callback = nothing
                     )
                 else
@@ -2127,7 +2130,7 @@ function SciMLBase._concrete_solve_adjoint(
                             false,
                             SciMLBase.FullSpecialize,
                         }(_f),
-                        u0 = _u0, p = SciMLStructures.replace(Tunable(), p, _p),
+                        u0 = _u0, p = replace_tunables(_p),
                         tspan = _tspan, callback = nothing
                     )
                 end
@@ -2160,7 +2163,7 @@ function SciMLBase._concrete_solve_adjoint(
                             _g
                         ),
                         g = _g,
-                        u0 = _u0, p = SciMLStructures.replace(Tunable(), p, _p),
+                        u0 = _u0, p = replace_tunables(_p),
                         tspan = _tspan, callback = nothing
                     )
                 else
@@ -2170,7 +2173,7 @@ function SciMLBase._concrete_solve_adjoint(
                             false,
                             SciMLBase.FullSpecialize,
                         }(_f),
-                        u0 = _u0, p = SciMLStructures.replace(Tunable(), p, _p),
+                        u0 = _u0, p = replace_tunables(_p),
                         tspan = _tspan, callback = nothing
                     )
                 end
@@ -2178,7 +2181,6 @@ function SciMLBase._concrete_solve_adjoint(
                 error("TrackerAdjont does not currently support the specified problem type. Please open an issue.")
             end
         end
-
         kwargs_filtered = NamedTuple(filter(x -> x[1] != :sensealg, kwargs))
         sol = solve(
             _prob, alg, args...; sensealg = DiffEqBase.SensitivityADPassThrough(),
